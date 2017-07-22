@@ -6178,15 +6178,15 @@ MethodHandle foldArguments(MethodHandle target, int pos, MethodHandle combiner)
 
 ##### 查找
 
-将修改MethodHandles.Lookup.findSpecial（Class <？> refc，String name，MethodType类型，Class <？> specialCaller）的方法的实现，以便在接口上找到超级可调用的方法。虽然这不是API的变化，但其记录的行为显着变化。
+将修改MethodHandles.Lookup.findSpecial（Class <?> refc，String name，MethodType类型，Class<?> specialCaller）的方法的实现，以便在接口上找到超级可调用的方法。虽然这不是API的变化，但其记录的行为显着变化。
 
 此外，MethodHandles.Lookup类将通过以下两种方法进行扩展：
 
-类<？> findClass（String targetName）
+Class<?> findClass（String targetName）
 
-这将检索表示由targetName标识的所需目标类的Class <？>的实例。查找应用由隐式访问上下文定义的限制。如果访问不可行，则该方法会引发适当的异常。
+这将检索表示由targetName标识的所需目标类的Class <?>的实例。查找应用由隐式访问上下文定义的限制。如果访问不可行，则该方法会引发适当的异常。
 
-类<？> accessClass（Class <？> targetClass）
+Class<?> accessClass（Class <?> targetClass）
 
 这将尝试访问给定的类，应用由隐式访问上下文定义的限制。如果访问不可行，则该方法会引发适当的异常。
 
@@ -6201,6 +6201,2263 @@ MethodHandle foldArguments(MethodHandle target, int pos, MethodHandle combiner)
 该JEP与JEP 193（可变句柄）相关，由于VarHandles取决于MethodHandle API，因此可以进行一定的重叠。这将与JEP 193的所有者合作解决。
 
 关于维护版本的JSR 292增强功能的JBS问题可以被认为是这个JEP的起点，从这个问题中可以看出达成协议的点。
+
+#### JEP 275: Modular Java Application Packaging
+##### 概要
+
+将Project Jigsaw的功能集成到Java Packager中，包括模块识别和自定义运行时创建。
+
+##### 动机
+
+当Java Packager（javapackager）由于JRE的大小被要求将运行时捆绑作为其打包的一部分时，始终生成了大量的二进制文件。项目拼图将开发JEP 282 jlink中定义的工具：Java Linker，允许创建包含标准和JDK模块子集的运行时映像，使Java Packager可以减少捆绑运行时映像的大小。
+
+##### 描述
+
+在大多数情况下，Java Packager工作流将保持不变。将添加拼图中的新工具，并在某些情况下替换一些步骤。
+
+##### 只生成Java 9应用程序
+
+Java Packager将仅创建使用JDK 9运行时的应用程序。这将简化用于组合应用程序和java运行时的工具的大量代码路径和假设。如果用户想要创建Java 8应用程序，则JDK 8附带的Java Packager Java 8版本将继续运行。我们假设需要在Java 8和Java 9上同时工作的自包含应用程序的数量将基本为零，因为应用程序带有自己的JVM。
+
+##### 使用jlink生成嵌入式Java运行时和应用程序映像
+
+目前，JRE是复制的，不需要的部分从复制的运行时删除。
+
+Java链接器工具jlink提供了一种生成仅包含所需模块的JRE映像的方法。此外，jlink可能会为其图像生成过程暴露一些钩子，我们可以通过例如将删除可执行文件添加到jlink处理或压缩来进一步自定义图像。
+
+Java Packager将调用jlink来创建一个应用程序运行时映像，该映像将嵌入到应用程序映像中。如果jlink失败，Java Packager将失败并出现适当的错误。预计封装的模块将与JDK 9一起运送。
+
+jlink工具包括一个插件和扩展机制。当使用jlink生成应用程序映像时，我们将与这些机制集成，以便jlink进程的输出是适当的平台特定布局中的应用程序映像。这将具有使应用程序图像生成不依赖于Java Packager进程的所需的副作用。
+
+##### javapackager CLI参数，Ant任务和Java Packager API
+
+Java Packager具有新的CLI参数，以匹配JEP 261中为选项语法和值指定的其他Java工具链：
+
+```
+--add-modules <module>(,<module>)*
+--limit-modules <module>(,<module>)*
+--module-path <path>(:<path>)*
+-p <path>(:<path>)*
+--module <module>/<classname>
+-m <module>/<classname>
+```
+要为long选项指定参数，可以使用  --<name>=<value> or --<name> <value>。
+
+注意：--module-path映射到jlink的--module-path，但具有可选的默认值。 更多信息如下。
+
+在<fx:application>，<fx:secondaryLauncher>和新的<fx:runtime>任务之间将有新的ANT任务。
+
+例如：
+
+```
+<fx:deploy outdir="${bundles.dir}"
+           outfile="MinesweeperFX"
+           nativeBundles="all"
+           verbose="true">
+
+    <fx:runtime strip-native-commands="false"> <-- new
+        <fx:add-modules value="java.base"/>
+        <fx:add-modules value="jdk.packager.services,javafx.controls"/>
+        <fx:limit-modules value="java.sql"/>
+        <fx:limit-modules value="jdk.packager.services,javafx.controls"/>
+        <fx:module-path value="${java.home}/../images/jmods"/>
+        <fx:module-path value="${build.dir}/modules"/>
+    </fx:runtime>
+
+    <fx:application id="MinesweeperFX"
+                    name="MinesweeperFX"
+                    module="fx.minesweeper" <-- new
+                    mainClass="minesweeper.Minesweeper"
+                    version="1.0">
+    </fx:application>
+
+    <fx:secondaryLauncher name="Test2"
+                          module="hello.world" <-- new
+                          mainClass="com.greetings.HelloWorld">
+    </fx:secondaryLauncher>
+</fx:deploy>
+```
+<fx:runtime>, <fx:limit-modules>, <fx:add-modules>, <fx:modular-path>是可选参数。 如果与模块化应用程序捆绑，则使用<fx：application>上的module =“module name”参数，否则如果应用程序是非模块化应用程序，则该参数无效。 参数<fx：limit-modules>，<fx：add-modules>，<fx：modular-path>可以与本文档中使用的-add-mods，--limit-mods和-module-path进行交换。 请参见模块配置部分，其他模块是参数信息。
+
+Java Packager API将获得模块化选项的新方法。
+
+##### 剥离本地命令
+
+剥离诸如java.exe的命令已经是Java Packager的默认值，但是一些开发人员需要使用诸如java.exe这样的命令行工具。 因此，通过关闭删除命令可以选择包含本机命令：
+
+```
+--strip-native-commands false
+```
+
+##### 添加对模块和模块路径的支持
+
+除了类路径之外，拼图引入了“模块路径”的概念。 模块路径包括到库，JDK模块和应用程序模块的路径。 使用命令行参数指定包含这些模块的路径：
+
+```
+--module-path <path>(:<path>)*
+```
+
+它只能提供一次，它是一个平台路径。根模块及其传递依赖关系被链接以创建模块化运行时映像（JEP 220）。
+
+开发人员可以提供一个包含封装模块的路径，并将其与不同版本的Java Runtime捆绑在一起。如果开发人员没有提供JDK打包的模块，那么Java Packager将默认使用Java Packager随附的JDK版本提供的打包模块（$ JAVA_HOME / jmods）。
+
+Java Packager当前没有提供将打包的模块复制到应用程序运行时映像的机制，而不是链接到jimage。如果应用程序支持插件，并且这些模块位于捆绑的映像之外，那么最有可能需要这种情况。如果是这种情况，开发人员将需要使用用户JVM参数覆盖来覆盖--module-path和-add-modules。
+
+##### 模块配置
+
+使用Java Packager：非模块化JAR和模块化应用程序将捆绑两种类型的Java应用程序。
+
+非模块化JAR由JAR文件中没有module-info.class的JAR组成。使用-appClass和-BmainJar =。用于应用。开发人员将使用Java Packager与JDK 9之前的版本相同的参数，使用-srcfiles，-Bclasspath =，-appClass和-BmainJar = arguments。对于向后兼容性，不需要新的模块参数，默认情况下，嵌入式Java运行时将由所有可再分发模块组成，因此捆绑运行时将不会减小大小。开发人员可以使用--module-path，--add-modules和-limit-modules来包含第三方模块。
+
+例如：
+
+```
+javapackager -deploy -v -outdir output -name HelloWorld -Bclasspath=hello.world.jar -native -BsignBundle=false -BappVersion=1.0 -Bmac.dmg.simple=true -srcfiles hello.world.jar -appClass HelloWorld -BmainJar=hello.world.jar
+```
+
+模块化应用程序由包含module-info.class的JAR，分解模块或打包模块组成。 要与模块化应用程序捆绑，必须指定--module和--module-path参数。 - 模块与-appClass和-BmainJar =相互排斥。 --module-path必须提供包含主模块的路径（以--module为参考的模块）。 可以使用--add-modules和-limit-modules将其他模块添加到运行时映像中。 通过核心反射或服务动态加载的模块必须用--add-modules手动指定。 -add-modules提供的主模块和模块将定义根模块。 jlink将创建具有指定根模块及其传递依赖关系的运行时映像。
+
+例如：
+
+```
+javapackager -deploy -v -outdir output -name Test -native -BsignBundle=false -BappVersion=1.0 -Bmac.dmg.simple=true --module-path /path/to/jmod --module hello.world/com.greetings.HelloWorld
+```
+此命令将生成由主模块及其所有传递依赖关系组成的运行时映像。 可以通过--add-modules选项添加其他模块。
+
+##### 模块
+
+包装商将分为两个模块：
+
+```
+jdk.packager
+jdk.packager.services
+```
+jdk.packager包含构建应用程序包和安装程序的Java Packager。 jdk.packager.services是一个与应用程序包绑定的模块，可以在运行时提供对包装程序服务的访问，例如JVM用户参数。
+
+##### JNLP
+
+生成的包将取决于输入和提供的选项。历史上-deploy将生成所有本机bundle和.jnlp文件。现在，与-module结合使用，不会生成.jnlp文件，因为JNLP不支持新的模块化选项。没有选项将生成所有可用的本机包。
+
+##### 测试
+
+首先，在JDK 8中工作的Java Packager的现有API，命令行和Ant调用应该在JDK 9中运行，因此应该运行JDK 8打包程序的现有测试。
+
+需要编写新的测试来执行暴露的支持运行时映像生成，模块路径规范和吉普流程交互的新标志。
+
+##### 风险与假设
+
+我们假设项目将按照已经描述的方式进行大量的交付。如果将大功能部件移动到较新的版本，例如模块路径和模块系统，则该JEP的相应部分也将滑动。
+
+##### 依赖性
+
+200: The Modular JDK
+201: Modular Source Code
+220: Modular Run-Time Images
+261: Module System
+282: jlink: The Java Linker
+
+#### JEP 276: Dynamic Linking of Language-Defined Object Models
+##### 概要
+
+提供一种用于将诸如“读取属性”，“写入属性”，“调用可调用对象”等对象的高级操作连接起来的功能，以INVOKEDYNAMIC调用站点中的名称表示。为普通Java对象提供这些操作的常用语义的默认链接器，以及用于安装语言特定链接器的工具。
+
+##### 目标
+
+主要目标是允许在编译时将类型未知的表达式编译为INVOKEDYNAMIC指令，例如obj.color成为INVOKEDYNAMIC“dyn：getProp：color”的高级对象操作。所提供的基础架构将在运行时向一组具有特定对象类型知识的连接器调度这些呼叫站点的链接请求，并且可以产生适当实现操作的方法句柄。
+
+这些设施为执行程序的运行时提供了基础，这些程序是用编程时不知道的对象表达概念的语言编写的，需要在这些对象上表示典型的面向对象的操作。
+
+组合多语言运行时链接器的能力允许在单个JVM进程中共存的多个语言运行时间之间的合理数量的互操作性;当一个语言的编译器发出的INVOKEDYNAMIC调用站点应该由另一个语言的链接器链接到属于一个运行时的对象传递到另一个运行时。
+
+##### 非目标
+
+我们不希望为任何这样的语言的任何单一编程语言或执行环境提供用于操作的链接语义。我们不会更改JVMS描述的引导呼叫站点的机制;我们只是用它。
+
+##### 动机
+
+INVOKEDYNAMIC为应用程序特定的方法链接提供了一个JVM级的基础。它不提供一种表达对对象的更高级别操作的方式，也不提供实现它们的方法。这些操作是面向对象环境中通常的操作方案：属性访问，集合元素的访问，构造函数的调用，命名方法的调用（可能具有多个调度，例如Java重载方法的链接和运行时等效解析度）。这些都是JVM中通常需要的语言的功能，但是每种语言实现传统上都必须单独重新启动它们。虽然语言之间的这种操作的语义有预期的变化（他们需要有一些歧视，毕竟，否则它们都是相同的语言），它们都有一个共同的需求：链接到Java平台对象被称为“普通Java对象”，即不属于或由语言运行时生成的Java类的实例）以语义上与Java语言中的使用相匹配的方式。
+
+Nashorn是该方法可行性的成功证明;当它遇到表单的表达式，例如obj.foo时，Nashorn字节码编译器可以发出一个INVOKEDYNAMIC“dyn：getProp：foo”，然后在运行时转到动态链接器，以提供属性getter的实现，具体取决于表达式是否计算为JavaScript对象，一些纯Java对象或其他内容。
+
+提供从动态语言到Java的链接工具也提供了几乎所有链接语言所需的所有内容，Nashorn也是这样：它具有统一的链接机制，将分派到自己的链接器或“简单的Java对象”接头。此外，如果运行时具有对自身和Java对象的统一链接体系结构，那么链接到同一个JVM中的另一个语言运行时的对象的能力就可以免费提供，从而提供合理的跨语言互操作性。
+
+这是一种有用的常用功能，用于实现以某种程度的编译时类型不确定性编译为字节码的任何系统（例如动态语言运行时）。
+
+##### 描述
+
+目前作为Nashorn在JDK 8内部依赖的jdk.internal.dynalink。*包中的代码包含一个工作实现; 我们希望将其作为一组名为jdk.dynalink。*的程序集来增强，并将其显示在名为jdk.dynalink的新模块中。
+
+我们将在下面描述当前的设计，理解是随着工作的进行，本节将随着时间的推移而演变。
+
+##### 操作
+
+对象的操作表示为INVOKEDYNAMIC指令，其名称描述操作。
+
+此JEP定义了下列操作。此JEP定义的所有操作都具有前缀“dyn：”，并且此前缀用于将来的Dynalink扩展。
+
+对象属性的操作是：
+
+INVOKEDYNAMIC“dyn：getProp：<name>”（Object）Object用于检索对象上的命名属性的值。这里和所有其他操作中的签名中的类型可以比Object更具体（它们也可以是原语）。
+INVOKEDYNAMIC“dyn：getProp”（Object，Object）Object用于检索对象上的命名属性的值，其中接收方以第一个方式传递，属性名称作为第二个参数传递。与之前的操作不同，这里的名称不是固定的。
+INVOSEDYNAMIC“dyn：setProp：<name>”（Object，Object）void用于设置对象上的命名属性的值，第一个参数为接收方，第二个参数为要设置的值。
+INVOKEDYNAMIC“dyn：setProp”（Object，Object，Object）void用于设置对象上的命名属性的值，第一个参数为接收方，第二个参数为属性名，第三个参数为设定值。与之前的操作不同，这里的名称不是固定的。
+收集元素的操作如下：
+
+INVOKEDYNAMIC“dyn：getElem：<key>”（Object）Object用于使用固定键检索集合对象（数组，列表，映射等）的元素。在这种形式中，键必须是一个字符串，它表示为操作名称的一部分，但是当使用数字索引链接到集合时，允许运行时将其解析为数字字面值。
+INVOKEDYNAMIC“dyn：getElem”（Object，Object）Object用于检索集合对象的元素，其中接收方作为第一个被传递，元素键作为第二个参数传递。
+INVEREDYNAMIC“dyn：setElem：<key>”（Object，Object）void用于设置收件人的元素（数组，列表，地图等），其中接收方作为第一个被传递，并且该值被传递作为第二个参数。在这种形式中，键必须是一个字符串，它表示为操作名称的一部分，但是当使用数字索引链接到集合时，允许运行时将其解析为数字字面值。
+INVEREDYNAMIC“dyn：setElem”（Object，Object，Object）void用于设置收件人的元素（数组，列表，地图等），接收方作为第一个传递，元素键作为第二个参数，作为第三个参数传递的值。
+方法调用和创建对象的操作是：
+
+INVOKEDYNAMIC“dyn：getMethod：<name>”（Object）Object用于检索对象的命名方法。
+INVOSEDYNAMIC“dyn：call”（Object，Object ...）Object用于调用可调用对象（例如，通过较早的dyn：getMethod调用检索的东西），第一个参数是可调用的参数和可选的其他参数被传递给它。根据情况，操作的第二个参数通常是“this”对象。
+INVOKEYNAMIC“dyn：callMethod：<name>”（Object，Object ...）Object用于调用对象上的命名方法，第一个参数是具有命名方法的接收方，并将可选的其他参数传递给调用。该操作可以通过将dyn：getMethod折叠到dyn：call来实现。仍然需要单独的查找和调用操作，因为一些语言的语义要求它们是单独的步骤。
+INVOKEDYNAMIC“dyn：new”（Object，Object ...）Object用于调用传递的可调用对象，就像它是一个构造函数，第一个参数是构造函数对象，可选的其他参数被传递给它。一些语言允许调用callable作为普通调用和作为构造函数，因此需要从dyn：call单独的操作。
+
+##### 链接机制
+
+与INVOKEDYNAMIC一样，系统的入口点是引导方法。引导方法需要访问动态链接器。引导方法将创建一个可撤销呼叫站点的实例，并告诉其动态链接器进行初始化。
+
+DYNAMIC LINKER是一个最终协调链接的对象。当DYNAMIC LINKER初始化可撤销的呼叫站点时，它将站点的目标设置为自己的“relink”方法的方法句柄，该方法封装了将在呼叫站点上紧接着的第一次调用触发的实际重新链接算法。
+
+当重新链接方法被调用时，它将创建一个LINK REQUEST，它是一个包含调用站点的名称和签名的对象，以及触发链接的调用的实际参数。通过携带实际的调用参数，它向引导程序提供了比引导方法可用的更多信息。 LINK REQUEST被传递给DYNAMIC LINKER管理的GUARDING DYNAMIC LINKER。
+
+GUARDING DYNAMIC LINKER是一个可以为特定类对象提供链接的对象（例如，为同一个JVM类实例化的所有对象）。 GUARDING DYNAMIC LINKER生成的链接通常是有条件的，这意味着它受到一个布尔谓词的保护，该谓词会限制其有效性（例如，“只要接收者是List.class的实例”或“只要接收者的类是数组类“等）。可以处理当前LINK REQUEST的保护动态链接器将产生一个保护的协议，即实现该操作的方法句柄的三倍，实现保护的方法句柄，以及可选的用于异步无效的交换点的集合连锁。
+
+当语言运行时实例化动态链接器时，它将在其类的引导方法中使用，它将通过它自己的保护动态链接器的实例作为其应该管理的明显的链接器之一。 （或者传递几个链接器，因为一个语言可以有多个，可以自由地将其链接功能模块化成几个类; Nashorn目前定义了八个。）DYNAMIC LINKER将采用这些传递的链接器，通常添加一个“beans linker”作为链接普通Java对象的回退，还可以使用java.util.ServiceLoader机制通过语言运行时的类加载器为其他可能显示的其他语言实例化和添加链接器。
+
+动态链接器将采用其咨询的保护动态链接器之一产生的保护协议，并将其发送到可靠的呼叫站点。可以参与此高级链接的调用站点类预期实现接口RelinkableCallSite，该接口定义了一个“relink”方法，允许它们接收保护的INVOCATION并将其并入当前的链接。
+
+动态链接器的职责是作为其管理的GUARDING动态链接器与需要（重新）链接的RELINKABLE CALL SITES之间的协调者。这种设计分离了由链接器（通常是接收者的语言的链接器）由语言运行时决定的“如何”（由呼叫现场实现负责）决定的“什么”的关联。的呼叫者）。
+
+##### 可链接呼叫站点
+
+最简单的这样的调用站点是一个单一的可重新链接调用站点，每个重新链接调用都会抛出其当前链接，并使用传递的GUARDED INVOCATION的保护句柄作为“测试”句柄创建一个MethodHandles.guardWithTest（）组合器，其调用句柄为“目标”句柄以及指向DYNAMIC LINKER的重新链接方法作为其“回退”句柄的方法句柄。这样，在每次调用时，如果参数不通过保护 - 意味着当前链接的调用对他们​​来说是不够的 - 调用站点将重新链接到这些参数。 （最后，如果GUARDED INVOCATION还携带非空转换点，则单形呼叫站点还将使用SwitchPoint.guardWithTest（）无效组合器组合所得到的组合器，在无效组合器时再次回到重新链接。）
+
+当然，通过构建guardWithTest组合器的级联链，自然地，还存在更复杂的呼叫站点类，例如，可以随时包含与其链接的几种不同方法的链接呼叫站点。可以通过包含分析信息进一步增强，并定期重新链接一个包含从大多数被调用到最少调用等的排序的新链。
+
+##### 价值转换
+
+这个基础设施的另一个方面，我们前面没有提到，但对于任何动态语言来说至关重要的是支持价值转换。 java.lang.invoke API已经支持Java语言规范中描述的“方法调用转换”，作为MethodHandle.asType（）的一部分，但是我们需要准备允许其他隐式转换的语言，例如从int到java .lang.String。如果调用站点链接到期望String参数的方法句柄，但是该调用站点是为该参数键入“int”（或者更有可能在字节码中键入“Object”，但整数可以作为实际值出现调用中的参数值），链接器必须使用MethodHandles.filterArguments（）插入特定于语言的类型转换。
+
+类似于动态连接器，该系统需要有一个TYPE转换器工厂，它连接在一起的一套保护型转换器工厂。与保护动态链接器类似，保护型转换器工厂生产可以转换指定源和目标类型之间值的保护方法句柄。方法句柄需要有一个保护，因为通常调用站点的大多数参数都将被键入“对象”，因此请求的转换器将是“对象到字符串”，“对象到int”等等。语言运行时必须提供一个转换器方法句柄以及一个确定是否适用的保护，例如，方法句柄将对应于“我将如何将对象转换为int”一般用于我识别的对象“，以及守卫将回答“我认识到的类型的实际参数对象”？题。
+
+最后一块拼图，通常只需要在重载的Java方法中进行选择就是转换比较器。现在我们引入了语言特定的转换，当我们需要链接到Java类的方法时，我们实际上可以得到比Java语言允许的更广泛的适用方法，因为新的转换可以渲染更多适用方法如果我们仅仅使用JLS分辨率规则来尝试在这个扩展的一组适用的重载中进行选择，我们往往会以模糊的方式失败。因此，引入新型转换也引入了对新的转换排名规则的需求。保护型转换器工厂可以选择实现CONVERSION COMPARATOR接口，该界面将由动态重载方法分辨率逻辑参考，将其在调用位置T处的参数的源类型和相对位置中的参数的目标类型进行比较候选方法U1和U2，并且必须确定转换T-to-U1或T-to-U2是否是优选的。
+
+语言实现者将需要为其语言实施保护动态链接器，如果其语言允许比JLS允许的更多的隐式转换，则可选择保护型转换器工厂，最后还有一个转换比较器，在大多数情况下，它们还提供保护型转换器工厂。实际上，我们应该调查CONVERSION COMPARATOR功能是否应该是GUARDING TYPE CONVERTER FACTORY的强制性部分。
+
+##### 链接不成功
+
+如果没有GUARDING DYNAMIC LINKER成功连接一个操作，DYNAMIC LINKER将抛出类型为NoSuchDynamicMethodException（RuntimeException的子类）的异常。如果保护动态链接器可以明确地确定在被链接的参数被调用时操作将失败，则它本身可以立即引发特定于语言的异常，或者它可以产生一个保护的INVOCATION，当它通过警戒时会引发异常。
+
+##### 豆链接器
+
+该库包含一个名为BeansLinker的预定义的GUARDING DYNAMIC LINKER，它实现了普通Java对象上的所有支持的操作（属性映射到getter / setter方法或公共字段; Java类型（与Class对象不同）被公开为可用作静态字段和方法的构造函数和持有者;数组，列表和映射作为集合）。
+
+##### 备择方案
+
+这个问题也可以通过接口注入来解决，但是JVM当前不是运送功能。在这种情况下，代替INVOKEDYNAMIC指令，代码将包含针对定义执行这些操作的方法的预定义接口的IN​​VOKEINTERFACE指令。我们的方法是更通用的，因为我们不仅仅基于接收器的类型限制链接行为（尽管通常是这种情况），我们的方法允许链接器行为容易松散耦合的组合。例如，DOM节点可以与DOM链接器和普通Java链接器的组合链接，并具有将操作映射到XML InfoSet语义的DOM节点链接器，但是返回到用于非DOM操作的纯Java链接。
+
+考虑一个不需要INVOKEDYNAMIC的系统也是有趣的，但是具有按需自适应重新编译功能，以重新构建在呼叫站点遇到的不同类型对象的代码。再次，我们今天在JVM中没有这样的系统，而INVOKEDYNAMIC专门设计为替代这样的系统。
+
+##### 测试
+
+Nashorn已经使用了该库的内部版本，并且将期望转换为使用此JEP提出的版本（请参阅“依赖关系”部分）。图书馆通过Nashorn测试很好地行使。在库的原始外部（GitHub托管）版本中，没有将库的内部化迁移到jdk.internal.dynalink。*包中，提供了相当不错的附加单元测试。可以采用这些测试。
+
+##### 风险与假设
+
+该库旨在对JVM上各种语言实现有用。如果我们没有收到足够的反馈意见，那么总是可能有些语言的要求不合适，另一方面，验证任何这种对潜在范围蠕变的附加要求也是非常重要的。
+
+由于它提供对类的方法的动态访问，因此它将是一个潜在的有吸引力的攻击目标。我们非常清楚这些方面，花了大量的时间推理和设计，以防止任何访问或其他特权升级。也就是说，据我们所知，它不包含安全漏洞，但是由于在JRE内进行特权代码运输，因此可以拥有这些漏洞，访问并发出方法句柄。
+
+但是，我们将其限制在仅在出口包中的公共类的公共成员上运行。内置的bean链接器使用MethodHandles.publicLookup（）发现方法句柄，然后由于性能原因内部缓存并重新使用它们，除了调用方法被标记为调用者敏感;那些总是用MethodHandles.Lookup来查找，传递给引导方法，从不缓存。
+
+##### 依赖性
+
+Nashorn JavaScript Engine（JEP 174）预计将在此JEP上重新启动，因为JDK 8中的jdk.internal.dynalink软件包将在JDK 9中停用。预计这种更改将是次要的，因为我们将尽力减少偏离现有的API到合理的程度。
+
+#### JEP 277: Enhanced Deprecation
+##### 概要
+
+改进@Deprecated注释，并提供加强API生命周期的工具。
+
+##### 目标
+
+在规范中提供有关API的状态和预期配置的更好信息。
+
+提供一个工具来分析应用程序对已弃用的API的静态使用情况。
+
+##### 非目标
+
+将@deprecated Javadoc标记与@Deprecated注释统一起来，这个项目不是一个目标。
+
+##### 动机
+
+弃用是传达关于API生命周期的信息的一种技术：鼓励应用程序远离API迁移，阻止应用程序对API形成新的依赖关系，并向开发人员通报继续依赖API的风险。
+
+Java提供了两种表示弃用的机制：JDK 1.1中引入的@deprecated Javadoc标签和Java SE 5中引入的@Deprecated注释。在Java语言规范中镜像的@Deprecated注释的API规范是：
+
+注释@Deprecated的程序元素是程序员不鼓励使用的程序元素，通常是因为它是危险的，或者因为存在更好的替代方法。编译器在不被弃用的代码中使用或覆盖不推荐使用的程序元素时发出警告。
+
+但是，@Deprecated注释最终被用于几个不同的目的。实际上删除了很少被弃用的API，导致一些人相信没有任何东西永远不会被删除。另一方面，其他人认为，所有被弃用的东西最终都可能被删除，这也绝非是意图。 （虽然在规范中没有明确说明，但是提到的各种文档提到过时的API将在某些时候被删除）。这导致了一个不清楚的消息传递给开发人员关于@Deprecated的含义，以及什么，如果有的话，开发人员当他们遇到不推荐的API的使用时应该做。每个人都对实际的贬低感到困惑，没有人认真对待。这反过来使得很难从Java SE API中移除任何东西。
+
+弃用的另一个问题是仅在编译时发出警告。随着API在连续版本的Java SE中不再适用，现有的二进制文件继续依赖并使用不推荐使用的API，而不会发出警告。如果在JDK版本中删除已弃用的API，即使在不推荐使用的一个或多个版本之后，对于旧应用程序二进制文件的用户来说，这也是一个令人不快的惊喜。应用程序将突然失败，出现链接错误，没有发出任何警告。更糟糕的是，开发人员没有办法检查现有的二进制文件是否与不推荐的API有任何依赖关系。这导致在新的JDK版本上运行旧二进制文件的能力与通过旧API的退出演进规范的需求之间的严重紧张。
+
+总而言之，废弃机制已经在Java SE API中不一致地应用，从而导致对原则上的弃用的含义和实践中正确使用弃用的混淆。
+
+##### 描述
+
+##### 产品规格
+
+增强@Deprecated注释的主要目的是为有关API的弃用状态的工具提供更细粒度的信息。这些工具依次使用注释来向API的用户报告信息。 @Deprecated注释具有运行时保留，因此消耗堆内存。因此，这里的信息应该是最小的和明确的。
+
+以下元素将添加到java.lang.Deprecated注释类型中：
+
+一个返回布尔值的方法。如果为true，则表示该API元素在未来版本中被指定用于删除。如果为false，则API元素已被弃用，但目前无法在将来的版本中将其删除。该元素的默认值为false。
+
+一个名为since（）的方法返回String。此字符串应包含此API已被弃用的版本号或版本号。它具有自由格式的语法，但是发行编号应遵循与包含不推荐使用的API的项目的@since Javadoc标记相同的方案。请注意，该值对于Javadoc @since标记并不多余，因为它记录了引入API的版本，而@Deprecated注释中的since（）方法记录了不推荐使用API​​的版本。该元素的默认值为空字符串。
+
+由于这些元素被添加到现有的@Deprecated注释中，注释处理程序将会看到forRemoval（）和since（）的默认值，如果它们正在处理使用早于JDK 9的@Deprecated版本编译的类文件。
+
+API上的@Deprecated注释的存在是从API的作者或维护者到API的用户的通信。最普遍的，弃用是用户将其用法从不推荐使用的API迁移的建议，它们避免从新代码添加依赖关系或维护旧代码，或者维护依赖于此代码的代码存在一定风险API。有很多理由推荐这种迁移。原因可能包括：
+
+该API是有缺陷的，是不切实际的修复，
+
+使用API​​可能会导致错误，
+
+该API已被另一个API取代，
+
+API已经过时了，
+
+API是实验性的，受到不兼容的更改的约束，
+
+或上述的任何组合。
+
+拒绝API的确切原因通常不太明确，不能在注释中表示为标志或元素值。强烈建议在该API的文档注释中描述弃用API的原因。此外，还建议从文档中讨论和链接潜在的替代API。
+
+然而，提供了一个特定的标志值。 forRemoval（）布尔元素（如果为true）表示在将来的某个版本中将要删除API元素的意图。因此，API的用户预先警告，如果它们不从API迁移，则当升级到较新版本时，其代码可能会中断。如果forRemoval（）为false，则表示建议从不推荐使用的API迁移，但没有任何特定意图删除该API。
+
+@Deprecated注释和@deprecated javadoc标签都应该存在，或者两者都不存在于API元素上。没有另一个的存在被认为是一个错误。如果@deprecated标签存在于缺少@Deprecated注释的API上，则javac lint标志-Xlint：dep-ann将发出警告。目前没有警告，如果相反是正确的;见JDK-8141234。
+
+@Deprecated注释应该对已弃用的API的行为没有直接的影响，并且性能影响应该忽略不计。
+
+#### Java SE中的用法
+
+@Deprecated注释类型显示在Java SE中，因此可以将API应用于任何使用Java SE平台的类库。这些类库如何使用@Deprecated注释类型的确切规则和策略是这些库的维护者确定的问题。建议类图书馆维护者制定和记录这些政策。
+
+本节介绍@Deprecated注释类型在Java SE API本身上的用途，以及管理此类用途的策略。
+
+几个Java SE API将添加，更新或删除@Deprecated注释。 Java SE 9中实现的更改如下所示。除非另有规定，否则此处列出的弃权项不得移除。请注意，这不是Java SE 9中的全面弃用列表。
+
+将@Deprecated添加到boxed原语的构造函数（Boolean，Integer等）（JDK-8145468）
+
+将@Deprecated（forRemoval = true）添加到Runtime.traceInstructions和Runtime.traceMethodCalls方法（JDK-8153330）
+
+将@Deprecated添加到各种java.applet和相关类（JEP 289）
+
+将@Deprecated添加到java.util.Observable和Observer（JDK-8154801）
+
+将@Deprecated（forRemoval = true）添加到各种已取代的安全API中，其中包括java.security.acl（JDK-8157847），javax.security.cert和com.sun.net.ssl（JDK-8157712），java.security.Certificate （JDK-8157707）和javax.security.auth.Policy（JDK-8157848）
+
+将@Deprecated（forRemoval = true）添加到java.lang.Compiler（JDK-4285505）
+
+将@Deprecated添加到java.corba模块（JDK-8169069）
+
+修改已经不推荐使用的方法Thread.destroy（），Thread.stop（Throwable），Thread.countStackFrames（），System.runFinalizersOnExit（）以及各种废弃的Runtime和SecurityManager方法以使@Deprecated（forRemoval = true）（JDK-8145468 ）
+
+鉴于Java SE中的弃用历史，以及跨版本强调长期API兼容性，删除API是一个令人担忧的问题。因此，只有在Java SE平台的下一个版本中有一个清除明确的删除API的计划时，才应用forRemoval = true的元素。
+
+不应该从Java SE规范中删除一个API元素，除非它已在Java SE的以前版本中以@Deprecated（forRemoval = true）的注释提供。对于forRemoval = true引入弃用是可以接受的。在删除API之前，不必首先弃用forRemoval = false，然后升级到forRemoval = true。
+
+对于Java SE 9及更高版本中不推荐使用的API元素，since元素应包含表示不推荐使用API​​元素的版本的Java SE版本字符串。版本字符串应符合JEP 223中指定的格式。由于Java SE通常仅在主要版本中进行规范更改，因此版本字符串通常仅由“MAJOR”版本号组成。因此，对于在Java SE 9中不推荐使用的API元素，因此元素值应简单为“9”。
+
+在Java SE 9之前已经弃用的API元素将只能在时间允许的情况下填充它们的值。 （对所有的API做这个都是有边际价值的，主要是历史研究中的一个练习。）在这种情况下，用于此值的字符串应符合用于这些版本的@since javadoc标签的JDK版本约定，通常为1.0通过1.8但有时具有“微”版本号，例如1.0.2。在Java SE API上查找此值并找到空字符串的注释处理工具应该假定在Java SE 8或更早版本中发生了弃用。
+
+弃用API会增加项目在构建较新版本的Java SE时遇到的强制性警告数。一些项目，包括JDK本身，使用编译器选项构建，从而启用详细的警告，并将警告转换为错误。对于这样的项目，向Java SE添加不推荐使用的API可以引入大量警告，大大增加了迁移到新版本的Java SE的努力。用于管理警告的现有机制（例如@SuppressWarnings注释和编译器命令行选项）不足以处理此问题。这有效地限制了在给定的Java SE版本中哪些API可以被弃用，并且它使得过时但流行的API几乎是不可能的。这需要今后的努力来增强可用于管理废弃警告的机制。
+
+##### 对于警告政策的影响
+
+Java语言规范第9.6.4.6节要求依赖于依赖的API的弃用状态（“声明站点”）的特定警告行为以及正在使用该API的代码的弃用状态 “使用网站”）。 添加forRemoval元素添加了另一组必须定义的情况。 为了简洁起见，我们将引用以forRemoval = false作为“普通弃用”的抛弃，并将forRemoval = true替换为“终止弃用”。
+
+在Java SE 8及更早版本中，forRemoval不存在，所以唯一的弃用是普通的弃用。 是否发出弃用警告取决于使用地点和申报站点的弃用状态。 以下是Java SE 8中存在的案例表：
+
+```
+use site     | API declaration site
+    context      | not dep.   deprecated
+                 +-----------------------
+    not dep.     |    N          W
+                 |
+    deprecated   |    N          N (1)
+
+        N = no warning
+        W = warning
+```
+
+（注1）这是一个奇怪的例子。如果使用和声明站点都被弃用，则不会发出警告。如果两个站点都在一个单独的类库中，这是有道理的。由于它们保持在一起，所以在这种情况下发出警告是没有意义的。然而，如果使用地点在与声明网站分开维护的类图书馆内，则可能会以不同的速度发展，因此在这种情况下不发出警告可能是错误的。然而，在Java SE 5中引入@SuppressWarnings注释之前，这种机制对于减少编译JDK的警告数量很有用。
+
+（JLS 9.6.4.6如果使用地点与声明站点在同一最外层，也不要求发出警告，在这种情况下，使用和声明站点按照定义保持在一起，因此不发出警告的理由适用好。）
+
+在Java SE 9中，forRemoval的引入增加了与终止弃用有关的几个新情况。这需要引入一种新的警告。
+
+在通常使用API​​的情况下发出的警告是“普通的弃用警告”，与Java SE 8及更早版本相同。这些通常简称为“弃用警告”，作为以前使用的保留。
+
+在终止使用API​​的情况下发出的警告可能被称为“终端废弃警告”，但这是相当冗长的。相反，我们会提及“删除警告”等警告。
+
+拟议的情况表如下：
+
+```
+use site     |      API declaration site
+    context      | not dep.   ord. dep.   term. dep.
+                 +----------------------------------
+    not dep.     |    N         oW (2)       rW (5)
+                 |
+    ord. dep.    |    N          N (3)       rW (6)
+                 |
+    term. dep.   |    N          N (4)       rW (7)
+```
+
+（注2）“oW”是指在Java SE 8及更早版本中发生的与此类情况相同的警告。
+
+（注3）由于向后兼容的原因，左上角的四个元素与Java SE 8表中的相同。
+
+（注4）通过从兼容行为推断，不会发出警告。如果使用和声明站点都通常被弃用，如果更改使用站点以被终止，则将引发警告是不正确的。因此，在这种情况下不会发出警告。
+
+（注5）“rW”是指“删除警告”。在使用终端不推荐的API使用的地点发出的所有警告都是删除警告。
+
+（注6）这种情况是相当重要的。我们总是希望使用最终不推荐使用的API来生成删除警告，即使使用站点在不推荐使用的代码中。
+
+（注7）这与（6）类似。人们可能会认为，由于使用和声明网站都被终止使用，两者都是“消失”的，因此在这里发出警告是毫无意义的。但是可能的是，声明站点在图书馆内比使用网站更快地发展，因此使用网站可能会超过声明网站。因此，有关即将撤销声明网站的警告是必要的。
+
+涵盖右下角四个要素的一般规则如下。如果使用网站被弃用，无论是通常还是终止，都不会发出普通的弃用警告，但仍会发出清除警告。
+
+普通弃用警告的示例可能如下所示：
+
+```
+UseSite.java:3: warning: [deprecation] ordinary() in DeclSite has been deprecated
+```
+删除警告的示例可能如下所示：
+
+```
+UseSite.java:4: warning: [removal] removal() in DeclSite has been deprecated and marked for removal
+```
+
+警告的具体措辞以及警告定制的机制可能与编译器不同。
+
+禁止贬低警告
+
+在Java SE 8及更早版本中，可以通过使用@SuppressWarnings（“deprecation”）注释使用站点来抑制废弃警告。在存在终端弃用的情况下，需要修改此行为。
+
+考虑一个使用站点依赖于通常不推荐使用的API的情况，并且使用@SuppressWarnings（“deprecation”）注释抑制了结果警告。如果声明站点被修改为终止使用，我们希望在使用现场发生删除警告，尽管使用地点的警告已被压制。如果在这种情况下没有发出新的警告，则可能会终止API，然后在其使用地点删除任何警告。
+
+以下情况说明了该问题。假设@SuppressWarnings（“deprecation”）注释是为了抑制普通的弃用警告以及删除警告。然后，可能会发生以下情况：
+
+使用站点X取决于API Y，目前不被弃用
+Y的声明更改为普通弃用，在X上生成普通的弃用警告
+X用@SuppressWarnings（“deprecation”）注释，抑制警告
+Y的声明改为终止贬值; X上的清除警告仍然被抑制
+Y被完全删除，导致X意外断开
+由于弃用的目的是传达关于API演进的信息，特别是关于API的删除，在这种情况下缺乏任何警告是一个严重的问题。因此，即使废除“普通”到终止贬值，即使该使用地点的警告以前被压制，也应给予警告。
+
+我们需要一种抑制清除警告的机制，这与目前用于抑制普遍弃用警告的机制不同。解决方案是在@SuppressWarnings注释中使用不同的字符串。
+
+删除警告 - 使用终止不推荐的API引起的警告 - 可以通过注释来抑制
+
+```
+@SuppressWarnings("removal")
+```
+此注释仅禁止删除警告，而不是普通的弃用警告。 我们认为这是一种强大的压制形式，可以涵盖普通的弃用警告和清除警告。 但这可能会导致错误。 程序员可能会使用@SuppressWarnings（“remove”）来抑制普通的弃用警告。 如果普通的弃用更改为终端弃用，则会阻止警告出现，导致终端不推荐的API最终被删除时导致意外的破坏。
+
+与之前一样，使用通常不推荐使用的API的警告可以通过注释来抑制
+
+```
+@SuppressWarnings("deprecation")
+```
+
+如上所述，此注释仅抑制普通的弃用警告; 它不会抑制清除警告。
+
+如果有必要在特定场所抑制普通的弃用警告和删除警告，则可以使用以下构造：
+
+```
+@SuppressWarnings({"deprecation", "removal"})
+```
+
+以下是上一节中的警告表的副本，进行了修改，以显示如何抑制来自不同情况的警告。
+
+```
+use site     |      API declaration site
+    context      | not dep.   ord. dep.   term. dep.
+                 +----------------------------------
+    not dep.     |    -        @SW(d)       @SW(r)
+                 |
+    ord. dep.    |    -           -         @SW(r)
+                 |
+    term. dep.   |    -           -         @SW(r)
+
+        @SW(d) = @SuppressWarnings("deprecation")
+        @SW(r) = @SuppressWarnings("removal")
+```
+
+如果在最终已弃用的API的使用站点上使用@SuppressWarnings（“删除”）抑制了删除警告，并将该API更改为普通的弃用程序，则会出现普通的弃用警告。不过，我们期望将API从终端弃用的演进路径恢复到普通的弃用状态，这是相当罕见的。
+
+JLS第9.6.4.6节将需要相应修改。该更改由JDK-8145716涵盖。
+
+##### 静态分析
+
+将提供一个静态分析工具jdeprscan来扫描jar文件（或类文件的一些其他聚合）以使用已弃用的API元素。默认情况下，已弃用的API将是Java SE本身的弃用。将来的扩展将提供扫描在除Java SE之外的类库中声明的废弃的能力。
+
+##### 未来工作的想法
+
+可以提供动态分析工具jdeprdetect来跟踪不推荐使用的API的动态使用。它可以通过使用Java代理来实现，在运行时检测到使用这些元素时，会调用已弃用的API元素并发出警告消息。
+
+动态分析应该有助于捕捉静态分析失败的情况。这些情况包括反复访问已弃用的API，或使用通过ServiceLoader加载的已弃用的提供程序。此外，动态分析可以显示没有可能由静态分析标记的依赖关系。例如，代码可能引用已弃用的API，并且此引用将导致jdeprscan发出警告。但是，如果引用已弃用API的代码是死代码，jdeprdetect将不会发出警告。这些信息可以帮助开发人员优先处理代码迁移工作。
+
+某些功能完全位于库实现中，不会在任何公共API中显示。其中一个例子是“遗留合并排序”算法。有关更多信息，请参阅Java SE 7和JDK 7兼容性。不推荐使用的功能的库实现应该能够检查各种系统属性，以确定是否在运行时发出日志消息，如果是，则应该采用什么形式的日志消息。这些属性可能包括：
+
+java.deprecation.enableLogging - boolean，默认为false
+
+如果为true，由Boolean.parseBoolean方法确定，则库代码将记录弃用消息。将使用通过调用System.getLogger（）获取的记录器记录消息，并且将使用一级System.Logger.Level.WARNING记录消息。
+
+java.deprecation.enableStackTrace - boolean，默认为false
+
+如果为true，并且如果启用了弃用日志记录，日志消息将包括堆栈跟踪。
+
+其他工具的实施和改进超出了本JEP的范围。这些工具增强的一些想法在这里被描述为对未来工作的建议。
+
+可以增强javadoc工具来处理@Deprecated注释的详细代码。它还可以提供更显着的Detail值。 @deprecated Javadoc标记的处理应基本保持不变，但也可能会稍微修改，以包含有关forRemoval和自值的信息。
+
+可以修改标准doclet以不同的方式处理不推荐使用的API。例如，一个类的不建议使用的成员可能会被放入一个单独的选项卡中，在现有的选项卡的旁边，例如抽象和具体的方法。已弃用的类可以移动到包框架中的单独部分。目前，它包含接口，类，枚举，异常，错误和注释类型的部分。可以添加已弃用成员的新部分。
+
+不建议使用的API列表也可以增强。 （此页面通过每页顶部的链接，包含链接概述，软件包，类，使用，树，已弃用，索引，帮助的链接）。此页面目前是按种类组织的：界面，类，例外，注释类型，字段，方法，构造函数和注释类型元素。应突出显示包含Removal = true值的API元素，因为它们的即将删除可能会产生很大的影响。
+
+增强的@Deprecated注释将影响其他工具，如IDE。例如，默认情况下，IDE的自动完成菜单和对话框中不应使用不推荐使用的API。或者，可以提供自动重构规则，将呼叫替换为不推荐使用的API。
+
+##### 备择方案
+
+已经提出的一组替代方案包括使JVM停止，禁用已弃用的功能，或使用不推荐使用的API会导致编译时错误，除非提供版本特定的选项。所有这些提案将仅在通知开发人员首次使用已弃用的功能时才会成功，因为正常程序（或构建）流程在此时被中断。因此，后续使用已弃用的功能可能未被发现。遇到此类故障后，大多数开发人员将提供特定于版本的选项以启用已弃用的功能。因此，一般来说，这种方法在提供开发人员关于应用程序使用的所有已弃用功能的信息方面将不会成功。
+
+有人建议@deprecated的Javadoc标签退出，有利于@Deprecated注释。 @deprecated Javadoc标签和@Deprecated注释应始终都存在或不存在。然而，它们只是在非常抽象的概念意义上是冗余的。 @deprecated Javadoc标签提供描述性的文本，理由和信息以及替换API的链接。此信息非常适合包含已经具有其功能的javadoc文档（如链接标签）。将这些文本信息移动到注释值将需要javadoc从注释中提取信息，而不是文档注释。开发人员难以维护，因为注释没有标记支持。最后，注释元素在运行时占用空间，文档文本在运行时不需要在内存中存在。
+
+已经提出了一个字符串值作为细节代码。这似乎提供了更多的灵活性，但它也引入了弱类型和命名空间冲突的问题，可能导致未检测到的错误。
+
+@Deprecated注释中的“替换”元素存在于此提案的早期版本中。目的是为了表示一个替代已被弃用的API的特定API。在实践中，任何不推荐使用的API都不会有替代API;总有权衡和设计考虑，或者在几种可能的替代品中做出选择。所有这些主题都需要讨论，因此更适合于文本文档。最后，没有用于从注释元素引用另一个API的语法，而Javadoc已经通过其@see和@link标签来支持这样的引用。
+
+此提案的以前版本包括各种“原因”代码，包括未经验证的，危险的，OBSOLETE的，被拒绝的，未经授权的和实验的。这些尝试对API被弃用的原因进行编码，使用它的风险以及替换API是否可用。实际上，所有这些信息过于主观地被编码为注释中的值。相反，此信息应在Javadoc文档注释中进行描述。剩下的唯一重要的细节是是否有意删除API。这在forRemoval注释元素中表示。
+
+##### 测试
+
+将为新的工具构建一个相当简单的测试集。将提供一组可以不推荐使用的不同类型API元素的情况。将构建另一组案件，其中包括从上述案例中使用每种不推荐使用的API。应运行静态分析检查器jdeprscan，以确保它为所有这些用途发出警告。
+
+#### JEP 278: Additional Tests for Humongous Objects in G1
+##### 概要
+
+为G1垃圾收集器的Humongous Objects功能开发额外的白盒测试。
+
+##### 非目标
+
+我们不会开展G1急切填海试验。
+
+##### 描述
+
+垃圾第一（G1）是将垃圾堆分为相同大小区域的代代垃圾收集器。它具有并发收集阶段，可与应用程序并行工作，并且是多线程的。
+
+G1处理大于存储区域一半的对象，称其为对象，与其他对象不同：
+
+幽默的对象总是占据一些地区。如果一个很大的物体小于一个区域，那么它占据整个区域。如果一个很大的物体大于N个区域并且小于（N + 1）个区域，那么它占据（N + 1）个区域。在最后一个区域的空闲空间（如果有的话）中不允许分配。
+
+它们只能在同时标记循环结束时，在完全GC期间或在GC急性回收的情况下在年轻GC中收集
+
+他们永远不能从一个地区移动到另一个地区。
+
+由于G1是一个并发和多线程的GC，因此黑盒测试非常困难。收集死对象，几个并发线程，与运行应用程序并行工作的能力的几种方法，通常复杂的算法使得几乎不可能弄清G1的内部状态。为了解决这些问题，我们将扩展WhiteBox API并实现使用此API的Java测试来检查G1的内部状态。我们还将能够在压力测试中重用这些新开发的WhiteBox API方法。
+
+为了测试处理大型对象的代码如预期的那样工作，我们需要G1来提供更多有关堆栈中的对象的内部表示的细节。我们将向G1添加其他调试方法，这将使我们能够从其内部数据结构获取信息，并提供对启动垃圾回收的控制。后者是重要的，因为有三个代码路径可以收集不可达到的无效对象：完全垃圾收集，并发标记和年轻的GC在G1渴望回收的情况下。要测试每个路径，我们需要避免其他路径。
+
+为了帮助我们，我们将扩展WhiteBox API：
+
+阻止和启动并发标记和全面GC的方法。
+
+枚举G1的区域和访问区域属性的方法（例如，自由/占用/非常庞杂）。
+
+访问内部G1变量的方法，如空闲内存，区域大小和自由区域数。
+
+查找堆中区域的方法，以检查在属于非物质对象的区域中是否发生任何分配。 （这可能是第一步的“堆步行”API，允许我们完全迭代Java堆）。
+
+##### 备择方案
+
+可能的选择是：
+
+本地内置JVM测试。这样的测试可以用JVM标志开始。它们不合适，因为测试失败可能导致崩溃。 JVM应该能够在失败的测试后继续工作，这不能保证这种方法。
+
+本地测试。这将需要将调试方法添加到G1代码，实际上是开发一个本机的WhiteBox API。这种方法有一些缺点：我们无法使用这些调试方法进行压力测试。然而更重要的是，仍然没有本地测试框架。
+
+##### 风险与假设
+
+新测试可能需要更改G1。这可能会影响G1的性能和稳定性，尽管我们认为这不太可能。如果G1受到负面影响，那么我们可以构建产品二进制文件，而无需调试方法
+
+#### JEP 279: Improve Test-Failure Troubleshooting
+##### 概要
+
+自动收集诊断信息，可在测试失败和超时的情况下用于进一步的故障排除。
+
+##### 目标
+
+收集以下信息以帮助诊断测试失败和超时：
+
+对于在测试失败或超时后仍在主机上运行的Java进程：
+C和Java堆栈
+核心转储（Windows上的minidumps）
+堆统计
+环境信息：
+运行过程
+CPU和I / O负载
+打开文件和套接字
+可用磁盘空间和内存
+最新的系统消息和事件
+我们将开发一个提供此功能的库，并将库源与产品代码进行协调。
+
+##### 动机
+
+当没有关于测试环境的信息时，很难对间歇性测试失败进行故障排除。这种测试失败通常取决于测试执行顺序和并发，这使得它非常难以再现。
+
+##### 描述
+
+目前，jtreg测试工具中有两个扩展点。第一个是超时处理程序，当测试超时时，jtreg运行。第二个是观察者，它实现观察者设计模式来跟踪测试运行中的不同事件。我们将使用这些扩展点来收集诊断信息，并为jtreg开发一个定制的观察器和超时处理程序。
+
+将通过运行特定于平台的命令来收集有关环境和非Java进程的信息。收集有关Java进程的信息将通过JEP 228大量扩展的可用诊断命令来完成，例如，收集类似于hs_err文件的信息的print_vm_state命令。收集的信息将与测试结果一起存储以供以后检查。当测试失败时，观察者将收集有关finishedTest事件的信息。
+
+由于测试可能会创建其他进程，因此将收集有关测试流程及其子进程的信息。为了找到这样的过程，库将创建一个具有原始测试过程的进程树。
+
+库源将被放置在顶级存储库中的测试目录中，并且makefile将被更新以构建它们，并将其作为测试包的一部分进行捆绑。
+
+##### 测试
+
+我们将安排使用此库的定期测试。当结果和测试执行变得稳定时，我们将把库的使用扩展到其他组件。
+
+##### 风险与假设
+
+执行某些命令可能会挂起的风险：为了尽可能减少这种风险，命令将仅在分配的时间内执行并在此之后被中断。
+运行在主机上的磁盘空间：计划是归档信息，限制保存的信息量，并在收集信息之前检查可用磁盘空间。
+工具在平台或主机上不可用：如果工具在特定主机或平台上不可用，则会跳过依赖于缺少工具的命令，并将日志文件中添加警告消息。另一个可能的解决方案是从已知的工具库中下载所需的工具。
+系统资源耗尽：某些故障可能会导致不同类型的系统资源（CPU，内存，磁盘空间等）耗尽或者是由资源锁造成。由于在这些情况下无法运行命令来收集信息，因此将跳过命令执行，以防止进一步的系统退化。
+在Java中获取流程树：使用Java获取流程树需要在JEP 102中描述的新流程API。使用测试中的JDK作为稳定的JDK（即运行jtreg测试用例的JDK）可能会干扰测试结果。为了减轻这一点，我们将开发一种替代的流程树实现。该实施将简化将该项目转录为JDK 8。
+
+#### JEP 280: Indify String Concatenation
+##### 概要
+
+更改由javac生成的静态String-concatenation bytecode序列，以使用对JDK库函数的invokedynamic调用。这将使得未来可以对String连接进行优化，而不需要进一步更改javac发出的字节码。
+
+##### 目标
+
+为构建优化的字符串连接处理程序打下基础，可实现，无需更改Java到Bytecode编译器。应该尝试多种翻译策略作为这项工作的动机。生产（并可能切换到）优化的翻译策略是此JEP的一个伸展目标。
+
+##### 非目标
+
+这不是一个目标：引入任何可能有助于构建更好的翻译策略的新的String和/或StringBuilder API，重新访问JIT编译器支持优化String连接，支持高级String插值用例，或者探索Java编程的其他更改语言。
+
+##### 成功指标
+
+一个稳定的，面向未来的字节码序列由javac生成。目的是在任何主要的Java版本中最多只能更改字节码形状。
+
+字符串连接性能不会退化。
+
+启动的时间和时间表现不会超过合理的水平。
+
+##### 动机
+
+目前javac将String连接转换为StringBuilder :: append链。有时这个翻译不是最佳的，有时我们需要适当地调整StringBuilder。 -XX：+ OptimizeStringConcat选项可以在JIT编译器中进行积极的优化，该编译器可以识别StringBuilder附加链，并进行预置和就地复制。这些优化虽然富有成效，但脆弱，难以扩展和维护;参见例如JDK-8043677，JDK-8076758和JDK-8136469。改变javac本身的翻译是有诱惑力的;请参阅例如最近关于编译器开发列表的建议。
+
+当我们考虑在javac中改变任何东西时，每次我们想提高性能时，改变编译器和字节码形状似乎并不方便。用户通常期望相同的字节码在较新的JVM上运行得更快。要求用户重新编译其Java程序来执行性能并不友好，并且还会爆发测试矩阵，因为JVM应该识别所生成的字节码的所有变体。因此，我们可能想要使用一些技巧来声明以字节码连接字符串的意图，然后在运行时展开该意图。
+
+换句话说，我们正在引入类似于一个新的字节码“string concat”的内容。与Lambda工作一样，这封闭了JLS之间的差距，允许语言特征（在这种情况下是字符串连接）和JVMS没有适当的设施，强制javac将其转换为低级代码，并进一步强制VM实现来识别所有低级翻译形式。 invokedynamic允许我们通过提供核心库级别的字符串级联的保证接口来克服这种阻抗失配的一次飞跃。接口的实际实现甚至可以使用（潜在的不安全）私有JVM API来实现，用于连接，例如固定长度的字符串构建器，与特定用例绑定。直接在javac中使用这些API将意味着将它们暴露给公众。
+
+##### 描述
+
+我们将使用invokedynamic的功能：它提供了一个延迟链接的功能，通过提供在初始调用期间引导呼叫目标一次的方法。 这种方法不是什么新鲜事物，我们从翻译lambda表达式的当前代码中大量借鉴。
+
+想法是用java.lang.invoke.StringConcatFactory的简单invokedynamic调用来替换整个StringBuilder附加舞蹈，这样就可以接受需要连接的值。 例如，
+
+```
+String m(String a, int b) {
+  return a + "(" + b + ")";
+}
+```
+
+目前编译为：
+
+```
+java.lang.String m(java.lang.String, int);
+       0: new           #2                  // class java/lang/StringBuilder
+       3: dup
+       4: invokespecial #3                  // Method java/lang/StringBuilder."<init>":()V
+       7: aload_1
+       8: invokevirtual #4                  // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      11: ldc           #5                  // String (
+      13: invokevirtual #4                  // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      16: iload_2
+      17: invokevirtual #6                  // Method java/lang/StringBuilder.append:(I)Ljava/lang/StringBuilder;
+      20: ldc           #7                  // String )
+      22: invokevirtual #4                  // Method java/lang/StringBuilder.append:(Ljava/lang/String;)Ljava/lang/StringBuilder;
+      25: invokevirtual #8                  // Method java/lang/StringBuilder.toString:()Ljava/lang/String;
+      28: areturn
+```
+
+但是即使通过-XDstringConcat = indy，在提出的实现中可以使用naive indy翻译，可以显着简化：
+
+```
+java.lang.String m(java.lang.String, int);
+       0: aload_1
+       1: ldc           #2                  // String (
+       3: iload_2
+       4: ldc           #3                  // String )
+       6: invokedynamic #4,  0              // InvokeDynamic #0:makeConcat:(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;)Ljava/lang/String;
+      11: areturn
+
+BootstrapMethods:
+  0: #19 invokestatic java/lang/invoke/StringConcatFactory.makeConcat:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+```
+
+注意我们如何传递没有拳击的int参数。 在运行时，引导方法（BSM）在实现连接的实际代码中运行和链接。 它用适当的invokestatic调用重写invokedynamic调用。 这将从常量池中加载常量字符串，但是我们可以利用BSM静态参数将这些和其他常量直接传递给BSM调用。 这是一个建议的-XDstringConcat = indyWithConstants风味：
+
+```
+java.lang.String m(java.lang.String, int);
+       0: aload_1
+       1: iload_2
+       2: invokedynamic #2,  0              // InvokeDynamic #0:makeConcat:(Ljava/lang/String;I)Ljava/lang/String;
+       7: areturn
+
+BootstrapMethods:
+  0: #15 invokestatic java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #16 \u0001(\u0001)
+```
+
+注意我们如何只将动态参数（“a”和“b”）传递给BSM。 静态常数在链接过程中已经被处理了。 BSM方法提供了一个配方，它以什么顺序告诉动态和静态参数以及静态参数是什么。 此策略也分别处理null，primitives和empty string。
+
+这是一个开放的问题，即字节码风格应该是默认值。 有关字节码形状，连续风格和性能数据的更多详细信息，请参见实验说明。 可以在这里找到一个提出的引导方法API。 沙箱分支中可以找到完整的实现：
+
+```
+$ hg clone http://hg.openjdk.java.net/jdk9/sandbox sandbox 
+$ cd sandbox/ 
+$ sh ./common/bin/hgforest.sh up -r JDK-8085796-indyConcat
+$ sh ./configure 
+$ make images
+```
+
+通过使用以下方式，可以看到基线和补丁运行时之间的差异：
+
+```
+$ hg diff -r default:JDK-8085796-indyConcat
+$ cd langtools/
+$ hg diff -r default:JDK-8085796-indyConcat
+$ cd jdk/
+$ hg diff -r default:JDK-8085796-indyConcat
+```
+
+基准可以在这里找到：http://cr.openjdk.java.net/~shade/8085796/
+
+建议的实现成功构建JDK，运行回归测试（包括测试String concat的新测试），并在所有平台上传递烟雾测试。 多种策略可用于实际连接。 我们提出的实现表明，当我们将由javac生成的字节码序列移动到注入相同字节码的BSM中时，没有吞吐量匹配，这验证了该方法。 优化的策略被显示为比基准更好或更好，特别是当默认的StringBuilder长度不足和/或VM的优化失败时。
+
+有关更多数据，请参阅实验笔记。
+
+##### 备择方案
+
+这个提案有三种选择。
+
+首先，明显的替代方法：通过从提出的实现中移植一个字节代码生成策略来更改javac本身的字节码序列。虽然在短期内很简单，但是它脱离了与Java社区的不言而喻的合同：JVM足够聪明，可以识别和优化现有的字节码。每次我们想调整String-concatenation翻译时，我们不能轻易地强迫用户重新编译他们的Java程序。每当一个字节码形状发生变化时，JIT编译器都被迫识别出一个新的表单，并且大大地爆发了测试矩阵，并且设置了不知情的用户的奇怪的性能（mis）行为。如果要以性能原因改变字节码形状，我们最好在主要版本中以一种未来的方式进行一次。使用私有API来优化字符串包含也是不成问题的：javac生成的代码只能使用公共API。
+
+第二种方法：引入一个vararg StringConcat.concat（Object ... args）方法，并使用它来连接参数。主要的缺点是原始的拳击，然后将所有参数装入对象[]。虽然高级JIT可能会认识到这些习语，但我们正在对已经复杂的优化编译器进行新的和未经测试的优化。 invokedynamic做的大致相同，但它支持各种目标方法签名开箱即用。
+
+第三种选择：像现在一样继续做，并扩展-XX：+ OptimizeStringConcat来覆盖更多的案例。缺点是在JIT编译器中优化需要使用编译器IR来解释toString转换和存储管理，这使得它难以扩展，并且需要罕见的专业知识才能正确使用。而且，字节码形状的细微差异和怪异破坏了-XX：+ OptimizeStringConcat，我们必须在javac中加以注意以避免这种情况。参见例如JDK-8043677，JDK-8076758，JDK-8136469。
+
+所有这三种替代方案基本上使我们受到脆弱的编译器优化的怜悯。
+
+#### 测试
+
+字符串连接由大多数Java代码常规执行。除了定期的功能和性能测试外，我们还计划通过微型基准调查此变化的性能模型。可能需要开发不同策略的新的回归测试。
+
+#### 风险与假设
+
+其他字符串相关的更改。这种变化有可能与其他与String相关的变化相冲突，特别是Compact Strings（JEP 254）。缓解计划是生成与当前JDK完全相同的字节码序列，然后启用“Compact Strings”的JVM将运行相同的代码路径，忽略任何String-concat转换更改。事实上，我们的初步实验表明，我们的建议与Compact Strings相当。
+
+java.base豁免。由于此功能使用核心库功能（java.lang.invoke）来实现核心语言功能（String concatenation），因此我们必须免除java.base模块使用indified String concat。否则，当java.lang.invoke。*机器需要String concat工作时，会发生循环，这反过来需要java.lang.invoke。*机械。此豁免可能限制从此功能观察到的性能改进，因为许多java.base类将无法使用它。我们认为这是一个可以接受的缺点，这应该被虚拟机的优化编译器所覆盖。
+
+维护费用。传统的String-concat转换不会消失，因此我们必须维护-XX：+ OptimizeStringConcat和VM中较新的翻译策略的优化。对于不能使用indified String concat的情况，javac仍然需要提供一个备用，特别是一些系统类。这不构成重大问题，因为我们的性能故事包括在大多数策略中涉及-XX：+ OptimizeStringConcat。
+
+兼容性：不拼写invokedynamic的平台。一旦他们看到indized String concat，他们该怎么办？已经有了Lambdas的经验，那里的非独立拼写的平台不得不脱颖而出，并且静态地重新产生indy将在飞行中发出的相同的代码。虽然为naive String concat生成的代码序列比LambdaFactory简单，但它仍然在VM代码中创建更多的复杂性。由于javac仍然保留发出传统String concat序列的代码，所以上述平台可以使用这种后备。
+
+兼容性：其他编译器。其他（非javac）编译器是否会发出相同的字节码？我们建议将所有编译器实现更改为使用新的翻译策略？由于传统的String concat不会消失，其他编译器可以自由地发出他们今天发出的相同的字节码序列。他们可以逐渐地将一些翻译改为拟议的基于印度的翻译计划，因为他们认为合适。
+
+兼容性：字节码操纵器/编织器。即使没有源代码更改，工具也需要处理新的indys，即使没有使用源代码，只需要重新编译。我们不认为这是主要的问题，因为工具预计会处理Lambdas，所以他们需要识别invokedynamic。对于用来调试javac生成的StringBuilder :: append链的工具，需要进行更正。
+
+静态脚印。 Classfile大小可能是String-concat-heavy代码中的一个问题。那里有机器生成的文件，它耗尽了CP中的几乎所有条目，并且执行大量的字符串连接。似乎对于indified String concat，方法字节码占用空间要低得多，并且在java.lang.invoke机器的常量池中还有额外的静态开销，以及每个连接形状的一点开销。有关更多数据，请参阅上面的注释。
+
+启动开销存在这样的风险：启动开销对于这项工作向前推进是禁止的。 Lambdas的实施介绍了这些类型的翻译策略，但是如果您使用Lambdas，您只需支付价格。使用String concat，一旦invokedynamic被编译成字节码，在现有代码中没有使用+的转义（除非您更改代码以避免+并显式调用StringBuilder）。这种风险与调用动力机械的初始化有关（参见JDK-8086045），因此接受启动回归将意味着在需要初始化调用动力的其他变化中，尤其是模块系统（JEP 261），不存在启动回归， 。相反，如果模块系统在此变化之前落地，那么启动成本将被摊销。
+
+依赖
+
+```
+JEP 254: Compact Strings
+java.lang.invoke initialization costs (JDK-8086045)
+```
+
+#### JEP 281: HotSpot C++ Unit-Test Framework
+##### 概要
+
+启用并鼓励开发HotSpot的C ++单元测试。
+
+##### 目标
+
+支持编写和执行方法，类和子系统的单元测试
+
+支持单元测试，其中只有一个单元被测试，没有其他的运行
+
+支持需要VM初始化的测试
+
+支持快速测试，执行时间大约为毫秒级
+
+支持正负测试
+
+允许测试隔离
+
+支持测试与产品源代码共存
+
+支持与当前基础设施的集成
+
+为每个测试生成一个单独的结果
+
+能够轻松地运行单独的测试（从命令行）
+
+能够为测试故障提供最小的再现
+
+提供IDE支持
+
+允许框架发展，包括对框架进行快速修复
+
+支持测试选择和测试分组，其粒度类似于jtreg
+
+允许测试任何编译目标，产品以及调试
+
+允许测试平台相关的代码
+
+提供最少的文档：存储库中的how-to wiki和示例
+
+允许通过修改测试源或其他文件（例如排除列表）来排除执行中的测试
+
+支持所有内部测试进行转换
+
+支持Oracle支持的JDK 9构建平台
+
+##### 非目标
+
+替换Java测试。 C ++中的单元测试是对不同用例进行测试的补充。
+##### 动机
+
+在经过良好测试的代码库中，更容易进行更改。测试套件支持通过验证没有意外中断来进行更改的工程师。
+
+今天HotSpot有很多测试，但是没有很多测试是最直接的类型，并且不容易写这样的测试。
+
+为C ++引入测试框架是迈向更好的测试套件的第一步。 C ++的测试框架支持与JVM相同的语言的测试写入，然后将内部结构直接暴露给测试代码，与使用jtreg的java进行功能测试相比，可以轻松编写小型的尖锐测试。 。
+
+开发现有功能的单元测试的可能性将使得可以隔离测试新功能的C ++代码，并使得更容易为一些更深奥的问题编写回归测试。
+
+##### 描述
+
+Google测试框架（GTest）是最符合我们目标的C ++单元测试框架，它是一个xUnit测试框架，在社区中有很大的牵引力。 GTest框架：
+
+由其他人开发和支持
+提供IDE与Eclipse IDE的集成
+是经过验证的，完整的API
+具有功能丰富的执行模式
+有现有的文件和示例
+支持JUnit风格的测试结果，并与Hudson和Jenkins集成
+需要几个任务来允许使用GTest为HotSpot编写测试，还需要一些额外的任务来增强它。在目前的GTest状态：
+
+使用哪些HotSpot不使用的C ++结构，哪些在HotSpot中被禁用，例如异常，模板和STL
+Solaris / Oracle Solaris Studio不支持OS /编译器
+诚然，GTest是第三方工具，从而为现有的构建和测试过程添加了另一个依赖关系。 GTest也是相当大（71K LOC），并且在将来可能会变化不一致。为了避免测试框架本身发生变化的风险导致问题，我们需要控制使用哪个版本的GTest，并且可以将其指定为构建的一部分（尽管应该可以覆盖）。有一个依赖系统来自动下载和安装正确版本的GTest将是有益的。
+
+##### HotSpot测试目录布局
+
+新的测试需要一个住在源代码树中的地方。测试的根目录应该靠近但不在产品源本身，就像现有的测试目录结构一样。为了清楚起见，测试不应与现有的jtreg测试混合;相反，它们应该分成两个目录。我们建议将当前的jdk9 / hotspot / test目录分成两个子目录：
+
+jdk9 /热点/测试/ JAVA
+jdk9 /热点/测试/本地
+现有的jtreg测试将向下移动到java目录（包括JNI代码和shell脚本）中。 TEST.ROOT文件将保持在顶层。
+
+##### 构建目标和二进制文件
+
+产品二进制文件不得以任何可见的方式受测试代码的影响。例如，不应有其他符号导出，产品包不应包含任何测试。编译后的测试将分别放入测试包中，每个配置一个。测试将链接到从非剥离的JVM库导出的符号，该库从与常规库相同的目标文件创建。
+
+##### 调用测试
+
+使用make从命令行运行测试一定很容易。为了使测试结果与其他测试的结果兼容，调用可能会使用jtreg测试包装器进行运行，后者又调用GTest。 GTest本身可以产生JUnit风格的结果，它与Hudson / Jenkins和类似的工具很好地集成在一起。
+
+##### 备择方案
+
+替代方案1：HUTT。早期创建了一个名为“HotSpot Unit Test Tool”（HUTT）的原型框架，它是一个xUnit框架。它是一个比GTest（2K LOC）明显更小的框架，而不是外部依赖。这是一个可行但更昂贵的解决方案。它也缺少IDE支持。
+
+备选方案2：继续在Java中实现测试。可以使用Whitebox API访问JVM内部。添加Whitebox API比较麻烦，执行速度慢。它适合于一些反思，但远不是所有的测试。 Java测试的编写和执行成本更高，因为为了获得针对特定功能的高质量测试，测试变得非常复杂，通常很难保证确定性。
+
+备选方案3：继续使用内部测试。这个解决方案不符合许多既定目标。
+
+##### 风险与假设
+
+风险：GTest可能会在不适合作为HotSpot单元测试框架的方向发展。风险估计很低。
+
+缓解计划：叉车GTest框架，或使用HUTT。
+
+风险：返回GTest修复将被证明是非常昂贵的。
+
+缓解计划：叉车GTest框架，或使用HUTT。
+
+#### JEP 282: jlink: The Java Linker
+##### 概要
+
+创建一个工具，可以将一组模块及其依赖项组合并优化为JEP 220中定义的自定义运行时映像。
+
+##### 非目标
+
+此JEP不提交生成的工具来生成除模块化运行时映像之外的任何东西。
+
+这个JEP的目标不是为插件定义标准或支持的API。相反，插件API将是严格实验性的。一旦使用此JEP定义的插件API获得了经验，未来的JEP可能会重新访问此主题。
+
+##### 动机
+
+JEP 261将链接时间定义为编译时间阶段（javac命令）和运行时（java运行时启动器）之间的可选阶段。链接时间需要一个链接工具，它将组合和优化一组模块及其传递依赖关系，以创建运行时映像或可执行文件。
+
+链接时间是一个完成整个世界优化的机会，否则在编译时难度很大，而在运行时代价高昂。一个例子是当其所有输入变为恒定（即未知）时优化计算。后续优化将是删除不可达的代码。
+
+##### 描述
+
+链接器工具jlink的基本调用是：
+
+```
+$ jlink --module-path <modulepath> --add-modules <modules> --limit-modules <modules> --output <path>
+```
+
+##### 哪里：
+
+--module-path是由链接器发现可观察模块的路径; 这些可以是模块化的JAR文件，JMOD文件或分解模块
+
+--add-modules命名要添加到运行时映像的模块; 这些模块可以通过传递依赖关系导致添加其他模块
+
+--limit-modules限制了可观察模块的宇宙
+
+--output是将包含生成的运行时映像的目录
+
+在JEP 261中进一步详细描述了--module-path，-add-modules和-limit-modules选项。
+
+jlink将支持的其他选项包括：
+
+- 帮助打印使用/帮助信息
+- 打印版本信息
+
+##### 备择方案
+
+链接工具的替代方法是使用平台特定的JDK和JRE映像构建脚本。 这种方法将难以创建自定义的运行时映像。
+
+测试
+
+除了预期的单元测试以运行该工具之外，JDK构建将通过创建JDK和JRE运行时映像来定期运行jlink。
+
+风险与假设
+
+目前该工具的要求不完整。 该工具的可扩展性有望发展。
+
+依赖性
+
+该JEP依赖于由JSR 376（Java Platform Module System）指定并由JEP 261：Module System实现的模块系统。
+
+JDK 9中JEP 220的初始实现使用自定义构建工具来构建JRE和JDK映像。 该工具将被jlink替换。
+
+#### JEP 283: Enable GTK 3 on Linux
+##### 概要
+
+启用Java图形应用程序，无论是基于JavaFX，Swing还是AWT，都可以在Linux上使用GTK 2或GTK 3。
+
+##### 目标
+
+默认情况下支持本机GTK 2，无法转到GTK 3。
+系统属性指定时使用GTK 3。
+在GTK 3需要互操作性的情况下，可以及早检测到此要求，自动启用GTK 3。
+允许现有应用程序在安装了GTK 2或GTK 3之一或两者的Linux系统上未修改。
+##### 非目标
+
+在AWT / Swing和JavaFX之间共享动态包装机制。
+
+##### 动机
+
+Linux上的Java目前使用GTK 2.这引发了几个问题：
+
+有许多使用GTK的Java包。这些包括AWT / Swing，JavaFX和SWT。 SWT已经迁移到GTK 3，尽管有一个系统属性可以强制它使用旧版本。使用不同GTK版本的软件包混合会导致应用程序故障。对于基于SWT的Eclipse来说，这个问题尤其明显。 JavaFX可以与Swing或SWT共存。
+
+版本可用性：GTK 3于2011年发布，是活跃的开发流。尽管目前的普通Linux发行版默认情况下都可以使用版本2和3，但在JDK 9的整个生命周期中可能并非如此。
+
+稍后版本的SWT可能会丢弃GTK 2后备支持标志。
+
+一些应用程序（例如Java Mission Control）混合了JavaFX和SWT，并且依赖于GTK 2后备支持标志。
+
+##### 描述
+
+Java图形应该能够支持GTK 2和GTK 3。
+
+AWT和Swing目前使用所需的GTK函数的动态查询，而不是直接与本机库链接。
+
+JavaFX在其他领域采用了类似的机制，并且在调用GTK时可以在窗口管理代码中使用类似的机制。
+
+这种动态加载机制可以扩展为选择GTK 2或3，尽可能隐藏，包装函数，任何重大的程序差异。可能会有一些需要解决的程序性问题;例如，数据结构的差异或不同的功能。
+
+系统属性将用于影响GTK 2或3在运行时的选择。默认情况下，此属性将指示GTK 2以降低风险。如果GTK 2不存在于系统上，那么运行时间将自动选择GTK 3.如果运行时间可以及时检测到需要使用GTK 3，例如，当FXCanvas与SWT一起使用时，系统属性将自动为设置为GTK 3。
+
+JavaFX通过JFXPanel与AWT / Swing交互，并使用AWT功能进行打印支持。可以在JavaFX中实现只有GTK 2/3的支持，但是对于可以支持的应用程序的类型会有限制。
+
+AWT / Swing主要子任务：
+
+调整现有的动态GTK垫片以支持GTK 3。
+返工GTK LnF支持GTK-3。
+将FileChooserDialog对等体迁移到GTK-3。
+将AwtRobot迁移到GTK-3（或者删除对任何GTK的依赖）。
+通过现有的自动测试（GTK 2和GTK 3）进行测试。
+JavaFX子任务：
+
+创建一个垫片来动态加载GTK 2。
+调整动态GTK垫片以支持GTK 3。
+通过现有的自动测试（GTK2和GTK 3）进行测试。
+
+##### 备择方案
+
+迁移Java图形仅支持GTK 3。
+
+优点：
+
+迁移和测试方面的整体努力不足以将现有代码迁移到使用和使用GTK3。
+只有一个测试路径，而不是两个。
+只有一个代码路径前进。
+缺点：
+
+我们的测试没有检测到更高的错误风险。
+额外的努力与AWT的外观和感觉。
+（稍微不太可能）需要将GTK 3二进制文件安装在目标系统上。
+将要求JavaFX和AWT / Swing都被移植;没有机会放弃其中的一个子项目，而且还会交付另一个子项目。
+移交将需要在AWT和Swing之间进行更大程度的协调。
+##### 测试
+
+应该使用Linux上现有的Java系统测试。
+
+至少应该在一个或多个测试运行中使用（强制）非默认路径（GTK 3）来验证所有通过的测试是否继续通过。
+
+##### 风险与假设
+
+提出的解决方案的主要风险是将引入不会被测试所捕获的新错误。 AWT使用更多的功能，因此可能会因为GTK行为变化而增加新的错误。
+
+由于不可预见的技术难题，AWT / Swing子任务或JavaFX子任务将无法及时完成。
+
+如果AWT / Swing无法完成，则会对JavaFX造成运行时限制，但仅适用于混合两者的应用程序。主要是使用JFXPanel或打印的应用程序。
+
+如果JavaFX无法完成，则会混合JavaFX和SWT（FXCanvas）的应用程序会出现运行时问题。
+
+#### JEP 284: New HotSpot Build System
+##### 概要
+
+使用build-infra框架重写HotSpot构建系统。
+
+##### 目标
+
+该项目的目标是用基于构建基础框架的新的，简化的一个来替换当前的构建系统。进一步来说：
+
+利用构建基础框架中存在的功能，最大限度地减少代码重复。
+简化HotSpot构建系统，提供更可维护的代码库，并降低未来改进的门槛。
+##### 非目标
+
+由于目前的HotSpot构建系统对于良好的性能进行了相当大的调整，我们预计这一变化不会改善性能。
+
+##### 动机
+
+当前的HotSpot构建系统包含大量重复的代码和冗余功能，可以更好地由整体构建基础架构来处理。信息的结构和流程也很难跟踪，即使是经验丰富的开发人员。这样就不愿意修复问题，并向构建系统添加新的功能。
+
+缺乏与基础架构的完全集成也阻碍了整体构建过程的进一步改进，这可能会在整个JDK构建过程中实现更多的性能提升。
+
+##### 描述
+
+在高层次上，Building HotSpot与在JDK中构建任何其他本机组件没有太大的区别。实质上，我们需要调用libjvm.so的build-infra函数SetupNativeCompilation（）。在实践中，HotSpot的构建与JDK repo中的本地库不同，因此需要进行一些调整。
+
+一些技术差异的例子：
+
+HotSpot使用预编译头，需要支持。
+HotSpot使用自己的一组编译器标志，与标准产品的其余部分不同。
+libjvm.so可能针对不同的变体（如服务器和客户端）构建好几次。
+HotSpot使用可以启用或禁用的几个不同功能，例如C1和JVMCI。
+由于历史原因，HotSpot为平台和编译器使用不同的名称。
+在编译libjvm.so本地库之前，还需要发生其他前/后构建的事情，例如：
+
+创建构建工具，如adlc编译器。
+使用adlc和JVMTI工具创建gensrc。
+Dtrace支持需要前处理和后处理。
+需要构建其他库，如libjsig.so。
+##### 测试
+
+主要测试方法与JDK构建转换时相同，即使用compare.sh脚本。通过构建产品两次，一次使用旧的构建系统，一次使用新的，然后运行比较脚本，将指出生成的构建中的任何差异。
+
+本机构造工件永远不会实现100％逐字节的相等性，因为技术上的差异将影响使用相同构建系统的甚至重建。然而，比较脚本所指出的任何剩余的差异应该被解释为在理由之内。 （例如，由于不同的构建输出目录，这种更改可能会调试数据差异。）
+
+如果构建系统重新创建相同的二进制文件，这在理论上应该是足够的测试。为了保护，在最终整合之前，还将运行一套适当的正常产品测试。
+
+#### JEP 285: Spin-Wait Hints
+##### 概要
+
+定义API以允许Java代码提示正在执行自旋循环。
+
+##### 目标
+
+定义一个允许Java代码向运行时系统提示它处于自旋循环中的API。 API将是一个纯粹的提示，并且不会携带语义行为要求（例如，no-op是一个有效的实现）。允许JVM受益于某些硬件平台上可能有用的自旋循环特定行为。在JDK中提供无操作的实现和内在的实现，并在至少一个主要硬件平台上展现出执行的优势。
+
+##### 非目标
+
+查看超出旋转循环的性能提示不是一个目标。其他性能提示，如预取提示，不在本JEP的范围之内。
+
+##### 动机
+
+一些硬件平台受益于软件指示自旋循环正在进行中。可以观察到一些常见的执行益处：
+
+当由于各种因素使用自旋提示时，自旋回路的反应时间可能会得到改善，从而减少纺纱等待情况下的螺纹到螺纹延迟;
+
+涉及自旋回路的核心或硬件线程消耗的功率可能会减少，有利于程序的总体功耗，并且可能允许其他内核或硬件线程在相同功耗范围内以更快的速度执行。
+
+虽然长期旋转通常不鼓励作为一般的用户模式编程实践，但阻塞之前的短期旋转是通常的做法（JDK内部和外部）。此外，由于核心丰富的计算平台通常可用，许多性能和延迟敏感的应用程序（如Disruptor）使用将旋转线程专用于延迟关键功能的模式，并可能涉及长期旋转。
+
+作为一个实际的例子和用例，目前的x86处理器支持一个PAUSE指令，可用于指示旋转行为。使用PAUSE指令可以明显减少线程到线程的往返。由于其优点和广泛推荐的用途，x86 PAUSE指令通常用于内核自旋锁中，POSIX库中执行启发式旋转，甚至由JVM本身执行。然而，由于无法提示Java循环正在旋转，它的优点对于常规Java代码是不可用的。
+
+我们包括具体的支持证据：在E5-2697 v2上执行的简单测试中，测量通过在易失性场上旋转进行通信的两个线程之间的往返行程延迟行为，往返延迟可以在宽范围内明显减少18-20 ns百分位数（从10％到99.9％）。例如当两个旋转线程在共享物理CPU内核和L1数据高速缓存的两个硬件线程上执行时，这种减少可以表示最佳线程到线程通信延迟的高达35％-50％的改进。测试的完整列表可以在这里找到。
+
+![image](https://bugs.openjdk.java.net/secure/attachment/56567/SpinLoopLatency_E5-2697v2_sharedCore%60-600x288.png)
+
+上述图像显示了将包含内在spinLoopHint（）调用（内嵌为PAUSE指令）的自旋回路的反应等待时间与实时执行的相同循环相比较的延迟测量值，以及其时间的测量值执行实际的System.nanoTime（）调用来测量时间。
+
+##### 描述
+
+我们建议向JDK添加一个方法，这将提示正在执行一个自旋循环：java.lang.Thread.onSpinWait（）。
+
+一个空的方法将是java.lang.Thread.onSpinWait（）方法的有效实现，但内在的实现是可以从中受益的硬件平台的明显目标。作为JEP的一部分，我们打算为JDK生成一个内在的x86实现。原型实现已经存在，初步测试的结果显示出希望。有关类库和JVM中提出的更改，请参考JBS错误JDK-8147844以获取指向webrevs的指针。
+
+##### 备择方案
+
+JNI可用于循环提示CPU指令，但是JNI边界交叉开销往往大于指令提供的好处，至少在延迟时间内。
+
+我们可以尝试使JIT编译器推导出自旋循环的情况，并自动包含自旋循环提示CPU指令，而不需要Java代码提示。我们怀疑自动可靠地检测纺纱情况的复杂性，再加上在某些平台上使用提示的潜在权衡的问题将会显着延缓可行实施的可用性。
+
+##### 测试
+
+“vanilla”no-op实施的测试显然是相当简单的。
+
+我们认为，鉴于此API的占用面积非常小，内部x86实现的测试也将非常简单。我们期望测试将重点放在确认使用内在实现的自旋循环提示的代码生成正确性和延迟的好处。
+
+如果该API被接受为Java SE API（例如，在未来的Java SE 9或Java SE 10中包含在java。*命名空间中），我们希望开发相关的TCK测试用于潜在的Java SE TCK 。
+
+##### 风险与假设
+
+“香草”操作的实施显然是相当低的风险。固有的x86实现将涉及对多个JVM组件的修改，因此它们具有一些风险，但不包括添加到JDK中的其他简单内在函数。
+
+#### JEP 287: SHA-3 Hash Algorithms
+##### 概要
+
+实现NIST FIPS 202中指定的SHA-3加密散列函数（仅BYTE）。
+
+##### 非目标
+
+这个JEP不会实现SHAKE128和SHAKE256可扩展输出功能（XOF），因为它们不被批准为散列函数。最新的PKCS11 v2.40草案不包含SHA-3支持。因此，“SunPKCS11”提供商没有变化。此外，该JEP不会为其他加密功能（如签名，MAC和密码）实现基于SHA-3的算法，因为它们还没有标准。这些将在随后的增强和/或JEP中被覆盖。
+
+##### 动机
+
+SHA-2在10年前出版，虽然没有显示出对SHA-2的重大攻击，但NIST认为需要使用不同的加密散列函数作为SHA-2的替代方法。 SHA-3是NIST在公开竞争和审查过程中开发的第一个加密哈希算法。 FIPS 202“SHA-3标准：基于排列的散列和可扩展 - 输出功能”在2015年8月被定稿为标准。当FIPS 202仍然是草案时，诸如BouncyCastle等加密供应商开始支持SHA-3。 Solaris还将在未来的Solaris 12.0版本中支持SHA-3。由于散列函数在安全应用中广泛使用，并且其他供应商已经添加了SHA-3实现，因此在JDK中为SHA-3提供支持很重要。
+
+##### 描述
+
+FIPS 202定义了四个新的散列函数：SHA3-224，SHA3-256，SHA3-384和SHA3-512。这些可以实现为标准名称“SHA3-224”，“SHA3-256”，“SHA3-384”和“SHA3-512”的java.security.MessageDigest API的新算法。由于不需要任何参数，因此不需要新的API。
+
+以下是提供者列表和相应的算法增强功能：
+
+“SUN”提供者：SHA3-224，SHA3-256，SHA3-384和SHA3-512
+“OracleUcrypto”提供者：Solaris 12.0支持的SHA-3摘要
+##### 测试
+
+实施必须通过NIST提供的相关已知答案测试，其中输入大小是8位的倍数，现有的回归和单元测试。
+
+#### JEP 288: Disable SHA-1 Certificates
+##### 概要
+
+通过提供更灵活的机制，通过基于SHA-1的签名来禁用X.509证书链来改进JDK的安全配置。
+
+##### 非目标
+
+该机制的目的不是禁用所有用途的SHA-1证书。 CertPathValidator和CertPathBuilder API的PKIX实现以及TrustManagerFactory API的SunX509和PKIX实现都经过验证的X.509证书链受到限制。 JDK中X.509证书的其他用法（解析等）不受影响。 CertPathValidator，CertPathBuilder和TrustManagerFactory的第三方实施直接负责执行自己的限制。
+
+##### 动机
+
+由于存在碰撞攻击的风险，使用基于SHA-1的数字签名算法越来越成为安全问题。 NIST在SP 800-57第1部分中建议，SHA-1不应再用于将数字签名应用于数据。 CA /浏览器论坛公开信任的SSL证书的基准要求规定，截至2016年1月1日，证书颁发机构不得使用SHA-1发布任何从属CA或订阅者证书。其他软件供应商（谷歌，微软，Mozilla，苹果）已经发布了在证书中弃用SHA-1的计划。在JDK中，X.509证书链用于TLS中的服务器和客户端的身份验证，并用于验证签名代码的完整性和作者。
+
+##### 描述
+
+SHA-1证书的使用继续下降，特别是对于公认的SSL / TLS服务器（截至2017年3月3日，0.0％的受欢迎的SSL网站仍然使用SHA-1）。然而，许多企业使用私有证书颁发机构，通常需要更多时间来适应新的算法限制。此外，以前使用SHA-1证书签名和时间戳的代码将在未来一段时间内继续运行。因此，禁用所有SHA-1证书可能会破坏许多应用程序。因此，该JEP将加强算法约束机制，以实现更灵活的SHA-1限制策略。
+
+具体来说，对jdk.certpath.disabledAlgorithms安全属性的规范进行了以下增强：
+
+名为jdkCA的新约束，当设置时，如果将其用于由预先安装在JDK cacerts密钥库中的信任锚点所固定的证书链中，则会限制该算法。此条件不适用于由其他证书锚定的证书链，包括随后添加到cacerts密钥库中的证书链。另外请注意，限制不适用于信任锚证书，因为它们是直接受信任的。
+
+一个名为denyAfter的新约束，当设置时，如果在指定的日期之后在证书链中使用算法，则会限制该算法。限制不适用于信任锚证书，因为它们是直接受信任的。此外，签名JAR中使用的代码签名证书链如下处理：
+
+一个。如果证书链与没有时间戳的签名JAR一起使用，则在指定日期之后将被限制
+
+湾如果证书链与带有时间戳的签名JAR一起使用，则如果在指定的日期之前是时间戳的，则不会受限制。如果JAR在指定日期之后是时间戳的，则会受到限制。
+
+一个名为usage的新约束，当设置时，如果在指定的使用的证书链中使用算法，则限制算法。最初支持三种用法：TLSServer用于TLS / SSL服务器证书链，TLSClient用于TLS / SSL客户端证书链，SignedJAR用于与签名的JAR一起使用的证书链。
+
+上述增强功能后，jdk.certpath.disabledAlgorithms安全性属性的规范是（见每个约束的定义的java.security文件）：
+
+```
+DisabledAlgorithms:
+    " DisabledAlgorithm { , DisabledAlgorithm } "
+
+DisabledAlgorithm:
+    AlgorithmName [Constraint] { '&' Constraint }
+
+AlgorithmName:
+    (see below)
+
+Constraint:
+    KeySizeConstraint | CAConstraint | DenyAfterConstraint |
+    UsageConstraint
+
+KeySizeConstraint:
+    keySize Operator KeyLength
+
+Operator:
+    <= | < | == | != | >= | >
+
+KeyLength:
+    Integer value of the algorithm's key length in bits
+
+CAConstraint:
+    jdkCA
+
+DenyAfterConstraint:
+    denyAfter YYYY-MM-DD
+
+UsageConstraint: 
+    usage [TLSServer] [TLSClient] [SignedJAR]
+```
+
+此外，对jdk.jar.disabledAlgorithms安全属性的规范进行了以下增强：
+
+名为denyAfter的新约束，当设置时，如果在指定的日期之后在签名的JAR中使用算法，则会限制算法，如下所示：
+
+一个。 如果JAR没有时间戳，它将在指定的日期之后被限制（视为无符号）
+
+湾 如果JAR是时间戳的，它将不受限制，如果它在指定的日期之前是时间戳的。 如果JAR在指定日期之后是时间戳的，则会受到限制。
+
+上述增强功能后，jdk.jar.disabledAlgorithms安全性属性的规范是（见每个约束的定义的java.security文件）：
+
+```
+DisabledAlgorithms:
+    " DisabledAlgorithm { , DisabledAlgorithm } "
+
+DisabledAlgorithm:
+    AlgorithmName [Constraint] { '&' Constraint }
+
+AlgorithmName:
+    (see below)
+
+Constraint:
+    KeySizeConstraint | DenyAfterConstraint
+
+KeySizeConstraint:
+    keySize Operator KeyLength
+
+DenyAfterConstraint:
+    denyAfter YYYY-MM-DD
+
+Operator:
+    <= | < | == | != | >= | >
+
+KeyLength:
+    Integer value of the algorithm's key length in bits
+```
+
+这里有些例子：
+
+要禁用链接信任锚定在cacerts文件中预先安装的SHA-1证书，请将“SHA1 jdkCA”添加到jdk.certpath.disabledAlgorithms安全属性中：
+
+```
+jdk.certpath.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, \
+        DSA keySize < 1024, EC keySize < 224, SHA1 jdkCA
+```
+
+要禁用用于认证TLS服务器和该链的SHA-1证书以信任预安装在cacerts文件中的锚点，请将“SHA1 jdkCA＆usage TLSServer”添加到jdk.certpath.disabledAlgorithms安全属性中：
+
+```
+jdk.certpath.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, \
+        DSA keySize < 1024, EC keySize < 224, SHA1 jdkCA & usage TLSServer
+```
+要在已签名的JAR中禁用SHA-1，但在2017年1月1日之前的时间戳为JAR的情况除外，请将“SHA1 usage SignedJAR＆denyAfter 2017-01-01”添加到jdk.certpath.disabledAlgorithms安全属性和“SHA1 denyAfter 2017-01- 01“到jdk.jar.disabledAlgorithms安全属性：
+
+```
+jdk.certpath.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, \
+        DSA keySize < 1024, EC keySize < 224, \
+        SHA1 usage SignedJAR & denyAfter 2017-01-01
+
+jdk.jar.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, \
+        DSA keySize < 1024, SHA1 denyAfter 2017-01-01
+```
+
+##### 测试
+
+许多安全库回归测试目前使用SHA-1证书。 这些将被修改为重新启用SHA-1，或者，证书将被替换为SHA-2证书。
+
+##### 风险与假设
+
+说明部分概述了有助于减轻某些用例的兼容性风险的其他约束。 我们还将努力通过其他论坛和程序传达更改，以帮助确保用户了解这些更改，并了解如何在新的限制影响之前配置和测试其应用程序。
+
+##### 依赖性
+
+该JEP取决于对现有算法约束机制的三个增强（8140422,8154005,8160655）。
+
+#### JEP 289: Deprecate the Applet API
+##### 概要
+
+弃用Applet API，随着浏览器厂商删除对Java浏览器插件的支持，Applet API迅速变得无关紧要。指导开发人员使用替代技术，如Java Web Start或可安装的应用程序。
+
+##### 动机
+
+要在Web浏览器中运行Java applet，需要使用浏览器插件。然而，截至2015年底，许多浏览器供应商已经删除了插件支持，或者宣布了删除的时间表。一旦浏览器插件消失，就没有理由使用Applet API。
+
+##### 描述
+
+将@Deprecated（since =“9”）注释添加到以下类中：
+
+java.applet.AppletStub中
+java.applet.Applet中
+java.applet.AudioClip中
+java.applet.AppletContext中
+javax.swing.JApplet中
+我们不打算在下一个主要版本中删除Applet API，因此我们不会在这些注释中指定forRemoval = true。如果在稍后的一段时间，我们建议删除此API，那么我们将提前至少添加一个主要版本的forRemoval = true这些注释。
+
+appletviewer工具也将被弃用。工具启动时，标准错误流将打印弃用警告。
+
+##### 风险与假设
+
+这些注释将导致Java编译器为使用此API的所有代码发出废弃警告。如果警告被视为错误，它们将导致构建失败。
+
+#### JEP 290: Filter Incoming Serialization Data
+##### 概要
+
+允许过滤对象序列化数据的传入流，以提高安全性和鲁棒性。
+
+##### 目标
+
+提供一种灵活的机制，将可从应用程序可用的任何类中反序列化的类缩小到适合上下文的类。
+在过滤期间为过滤器提供图形大小和复杂度的指标，以验证普通图形行为。
+为RMI导出的对象提供一种机制，以验证调用中预期的类。
+过滤器机制不能对ObjectInputStream的现有子类进行子类化或修改。
+定义可由属性或配置文件配置的全局过滤器。
+##### 非目标
+
+定义或维护任何应允许或不允许的课程的具体政策。
+修复特定类或实现的复杂性或完整性问题。
+在流中提供预先的功能。
+对对象的内容提供细粒度的可见性。
+##### 成功指标
+
+对类的简单黑名单最小可衡量的性能影响
+##### 动机
+
+安全指南始终要求在使用前验证来自外部来源的输入。过滤机制将允许对象序列化客户端更容易地验证其输入，并导出RMI对象来验证调用参数。
+
+##### 描述
+
+核心机制是由序列化客户端实现的过滤器接口，并设置在ObjectInputStream上。过滤器接口方法在反序列化过程中被调用，以验证反序列化的类，正在创建的数组的大小，以及当流被解码时描述流长度，流深度和引用数量的度量。过滤器返回状态以接受，拒绝或保留状态未决定。
+
+对于流中的每个新对象，在对象被实例化和反序列化之前，使用对象的类调用过滤器。没有为流中编码的原语和java.lang.Strings调用过滤器。对于每个数组，无论它是一个数组的字符串，数组的字符串，还是对象的数组，使用数组类和数组长度调用过滤器。对于已经从流中读取的对象的每个引用，调用过滤器，以便可以检查深度，引用数量和流长度。如果启用日志记录，则过滤器操作将记录到“java.io.serialization”记录器中。
+
+对于RMI，通过RemoteServerRef导出对象，该RemoteServerRef在MarshalInputStream上设置过滤器，以在未调用的情况下验证调用参数。通过UnicastRemoteObject导出对象应该支持设置用于解组的过滤器。
+
+##### 过程范围过滤器
+
+通过系统属性或配置文件配置流程范围的过滤器。系统属性（如果提供）取代了安全属性值。
+
+系统属性jdk.serialFilter
+conf / security / java.properties中的安全属性jdk.serialFilter
+过滤器被配置为一系列模式，每个模式都与流中的类的名称匹配或限制。模式由“;”分隔（分号）。空格是重要的，被认为是模式的一部分。
+
+限制模式包含“=”并设置限制。如果使用最后一个值多次出现限制。如果调用ObjectInputFilter.checkInput（...）中的任何值超过了相应的限制，则过滤器返回Status.REJECTED。在类之前检查限制，而不考虑模式序列中的顺序。
+
+maxdepth = value - 图形的最大深度
+maxrefs = value - 内部引用的最大数量
+maxbytes = value - 输入流中的最大字节数
+maxarray = value - 允许的最大数组大小
+从左到右的其他模式匹配Class.getName返回的类或包名称。如果类是数组类型，则要匹配的类或包是元素类型。任何数量的维数的数组都与元素类型相同。例如，“！example.Foo”的模式拒绝创建example.Foo的任何实例或数组。
+
+如果模式以“！”开始，则如果模式的其余部分匹配，则该类被拒绝，否则被接受
+如果模式包含“/”，则直到“/”的非空前缀是模块名称。如果模块名称与类的模块名称相匹配，则剩余模式与类名称相匹配。如果没有“/”，则不会比较模块名称。
+如果模式以“。**”结尾，则它匹配包中的所有类和所有子包
+如果模式以“。*”结尾，则它将与包中的任何类匹配
+如果模式以“*”结尾，则它将匹配任何具有模式的类作为前缀。
+如果模式等于类名称，则它匹配。
+否则，状态未决。
+##### ObjectInputFilter接口和API
+
+对象输入过滤器接口由RMI和序列化的客户端实现，并提供过程范围可配置过滤器的行为。
+
+```
+interface ObjectInputFilter {
+    Status checkInput(FilterInput filterInfo);
+
+    enum Status { 
+        UNDECIDED, 
+        ALLOWED, 
+        REJECTED; 
+    }
+
+   interface FilterInfo {
+         Class<?> serialClass();
+         long arrayLength();
+         long depth();
+         long references();
+         long streamBytes();
+   }
+
+    public static class Config {
+        public static void setSerialFilter(ObjectInputFilter filter);
+        public static ObjectInputFilter getSerialFilter(ObjectInputFilter filter) ;
+        public static ObjectInputFilter createFilter(String patterns);
+    }   
+}
+```
+
+##### ObjectInputStream过滤器
+
+ObjectInputStream有其他方法来设置和获取当前的过滤器。 如果没有为ObjectInputStream设置过滤器，则使用全局过滤器（如果有）。
+
+```
+public class ObjectInputStream ... {
+    public final void setObjectInputFilter(ObjectInputFilter filter);
+    public final ObjectInputFilter getObjectInputFilter(ObjectInputFilter filter);
+}
+```
+
+##### 备择方案
+
+修改现有的子类和方法，但这将需要在第三方实现中禁止使用的更改。
+
+##### 测试
+
+没有现有的测试需要更新。 新的单元测试将使用序列化流，RMI导出的对象和全局过滤机制来测试过滤机制。
+
+##### 风险与假设
+
+提供给支持黑名单，白名单和流指标的过滤器的指标应足够。 当应用于已知的使用情况时，可能会发现一些额外的过滤机制。
+
+将为JDK 9引入新的API和接口。将此功能返回到以前的版本将需要引入实现特定的API，以避免更改旧版本的Java SE规范。
+
+支持以前的Oracle Java版本
+
+以前的版本支持可配置的过程宽带过滤器：
+Java™ SE Development Kit 8, Update 121 (JDK 8u121)
+Java™ SE Development Kit 7, Update 131 (JDK 7u131)
+Java™ SE Development Kit 6, Update 141 (JDK 6u141)
+
+#### JEP 291: Deprecate the Concurrent Mark Sweep (CMS) Garbage Collector
+##### 概要
+
+废弃并发标记扫描（CMS）垃圾回收器，意图在以后的主要版本中停止支持。
+
+##### 目标
+
+加快HotSpot中其他垃圾收集机的开发。
+
+##### 动机
+
+删除对CMS的支持，然后删除CMS代码，或至少更彻底地分离它，将减少GC代码库的维护负担，并加速新的开发。 G1垃圾收集器的目的是从长远来看成为大多数CMS使用的替代品。
+
+##### 描述
+
+弃用CMS，以便在命令行上通过-XX：+ UseConcMarkSweepGC选项发出警告消息。
+
+此JEP没有指定将放弃对CMS的支持的主要版本。决定什么时候将通知G1收藏家证明是适合替代CMS的程度。同时，鼓励CMS用户迁移到G1收集器（-XX：+ UseG1GC）。
+
+##### 测试
+
+当请求CMS收集器时，验证是否发出预期的弃用消息。
+
+##### 风险和假设
+
+对于某些应用程序，CMS是非常适合的，可能总是优于G1。
+
+当CMS的支持结束时，CMS将不会在新版本中提供
+
+#### JEP 292: Implement Selected ECMAScript 6 Features in Nashorn
+##### 概要
+
+在Nashorn实施了第六版ECMA-262（也称为ECMAScript 6）或简称ES6中引入的许多新功能的选定集合。
+
+##### 目标
+
+在JDK 9中的Nashorn中正确实现了大量的ES6功能。
+
+由于这项工作的规模，我们需要在几个步骤中提供ES6，其中JDK 9只会是第一个。剩余的ES6功能可能会在JDK 9更新版本和未来的主要JDK版本中提供。
+
+##### 动机
+
+ECMAScript 6于2015年6月发布。迄今为止，没有JavaScript引擎提供对ES6的完整支持，但是包括Google V8，Mozilla Spidermonkey和JavaScriptCore在内的主要引擎最近在实施ES6方面取得了重大进展。
+
+我们开始在Nashorn中使用JEP 203（let和const）在JDK 8u40中实现ES6。为了跟上其他引擎，我们计划增加对JDK 9中ECMAScript 6功能的重要子集的支持。
+
+##### 描述
+
+ECMAScript 6包括以下新功能：
+
+箭头功能：使用=>语法定义函数的简洁方法
+
+类：一种使用继承，构造函数和方法来定义类的方法
+
+增强的对象文字：支持特殊和计算的属性键
+
+模板字符串：动态评估的多行字符串
+
+解析赋值：使用对象或数组语法进行赋值绑定
+
+默认，休息和传播参数：更灵活的参数传递
+
+let，const和block范围：块范围声明的变量和常量
+
+迭代器和for循环：迭代任意对象的协议
+
+发生器：一种特殊的功能来创建迭代器
+
+Unicode：具有向后兼容性的完整Unicode支持
+
+模块：模块定义的语言级支持
+
+模块装载机：支持动态加载，隔离和编译挂钩
+
+地图，集合，WeakMap和WeakSet：各种新的集合类
+
+代理：允许创建具有特殊行为的对象
+
+符号：一种新的独特的属性键
+
+Subclassable内置：Array和Date等内置属性可以被子类化
+
+承诺：用于异步未来完成的API
+
+数学，数字，字符串和对象API：内置对象的各种新功能
+
+二进制和八进制文字：数字文字的新形式
+
+Reflection API：执行元编程操作的API
+
+尾部调用：允许递归代码，而无限制的堆栈增长
+
+在这些功能中，我们已经将JDK 8u40中的let，const和block范围实现为JEP 203.其他几个功能已经被原型化，应该被添加到JDK 9初始版本中支持的ES6功能列表中。其中包括以下内容：
+
+Template strings
+let, const, and block scope
+Iterators and for..of loops
+Map, Set, WeakMap, and WeakSet
+Symbols
+Binary and octal literals
+其他功能已经部分原型化，并且在有限的时间内完成了它们的完成。这些是包含在JDK 9更新版本中的候选者：
+
+Arrow functions
+Enhanced object literals
+Destructuring assignment
+Default, rest, and spread parameters
+Unicode
+Subclassable built-ins
+Promises
+Proxies
+Math, Number, String, and Object APIs
+Reflection API
+剩下的功能更多地涉及到并且可能需要更长的时间来实现。尽管在JDK 9更新版本中加入其中一些版本可能是可行的，但我们目前正在针对未来的主要JDK版本。这些功能是：
+
+Classes
+Generators
+Modules
+Module loaders
+Tail calls
+ES6功能实现尽管如此，JDK 9 Nashorn存储库中的Nashorn解析器已经支持ES6语法更改。
+
+##### 备择方案
+
+而不是在这里提出的迭代方法，我们可以选择忽略ECMAScript 6，而是专注于改进我们现有的基于ECMAScript 5的实现。
+
+或者，我们可以尝试单一实施ES6。然而，这将阻止我们早日获得反馈和发现错误。此外，ES6的新功能的大小和数量使得该方法不切实际
+
+对ES6不做任何努力将是一个错误，并向用户和客户传递错误的信息。
+
+##### 测试
+
+作为实施ES6部分工作的一部分，我们开发了一个功能测试的基础，将作为JEP的一部分。
+
+工作也开始运行ES6版本的官方ECMAScript一致性测试套件test262。初步结果令人鼓舞。然而，由于许多测试需要完整的ES6实现，因此将test262的ES5.1版本切换为ES6版本作为主要测试套件是不可行的。
+
+在开发和整合此JEP时，我们将依靠ES26版本的test262来发现错误并填写缺失的部分。一旦我们接近完整的ES6功能，该计划将切换到ES6版本作为我们的主要ES6测试套件。
+
+##### 风险与假设
+
+ECMAScript 6规范已经发布，其大部分已经在各种JavaScript引擎中实现，因此在规范文本中没有更多的移动规范或歧义的风险。
+
+我们可以确定功能的优先级排除了开发人员需求的一些功能。 然而，所提出的迭代方法确保随着时间的推移传递所有缺少的特征。
+
+##### 依赖性
+
+ES6中的各种功能之间存在依赖关系，我们选择了实现顺序，以增加复杂度来应对特征。
+
+#### JEP 294: Linux/s390x Port
+##### 概要
+
+端口JDK 9到Linux / s390x。
+
+##### 动机
+
+s390x（也称为“System z”或“z / Architecture”）是由IBM开发和支持的大型机架构。几个Linux发行版包括Ubuntu，RHEL / Fedora和SuSE都在s390x上运行。
+
+目前云端部署包括像TomEE，Cassandra，Spark，Hadoop和Neo4j这样的软件，仅举几例，依赖于Java。因为大多数这些软件包是开源的，所以它们在OpenJDK上运行最好，目前它不适用于Linux / s390x。
+
+这个JEP的原因是解决这个缺陷。
+
+##### 描述
+
+SAP有一个完整的（即模板解释器，C1和C2 JIT）和认证（Java SE 1.4-8）s390x端口，已经在生产中使用了多年。在s390x端口项目中，我们已经提供了这个端口，该端口运行在IBM System z型号z10或更高版本（仅限64位）上。
+
+这个JEP的重点不在于移植工作本身已经完成，而是将端口整合到JDK 9主仓库中。
+
+目前我们有一个具有少于10个变更集的补丁队列，并且很少有共享更改，这些更改不应该影响当前的平台。除了顶级和jdk存储库中的两个最小版本更改之外，所有其他更改仅在热点库中。
+
+我们已经开始为共同的变化开启JBS问题，其中一些已经在审查之中。
+
+##### 备择方案
+
+目前，零端口可以用于在Linux / s390x上运行JDK，但它相当慢（因为它只使用旧的，不推荐使用的C ++解释器），并且测试不是很好。运行工作负载（如应用程序服务器或Java编写的数据库应用程序）并不是真正的替代方案
+
+IBM的Linux开发套件也适用于Linux / s390x，但目前并不是开放源码，而Java应用程序通常需要一些配置/调优才能运行。此外，它不能用于测试即将发布的Java版本的新功能，因为它仅在JDK本身是GA之后才能发布。
+
+##### 测试
+
+该端口已在我们的商业SAP JVM产品中多年使用。我们已经在建立和测试OpenJDK版本的端口（通过运行jtreg和JCK测试，SPEC基准测试和几个SAP应用程序），并且将来承诺这样做。当然，我们还将在未来维护港口，并根据所有即将到来的要求进行更新。
+
+##### 风险与假设
+
+与以前的PowerPC / AIX端口不同，此端口仅需要对现有代码库进行最小的更改，因为：
+
+s390x是具有强大内存模式的CISC架构
+不需要与操作系统相关的更改，因为我们只针对Linux
+我们根本没有预见到对现有平台的影响。
+
+#### JEP 295: Ahead-of-Time Compilation
+##### 概要
+
+在启动虚拟机之前将Java类编译为本地代码。
+
+##### 目标
+
+提高小型和大型Java应用程序的启动时间，对峰值性能影响最大。
+
+尽可能少地更改最终用户的工作流程。
+
+##### 非目标
+
+没有必要提供一个明确的，暴露的类库机制来保存和加载编译的代码。
+
+##### 动机
+
+JIT编译器速度很快，但Java程序可能变得如此之大，以至于JIT需要很长时间才能完全预热。不经常使用的Java方法根本不会被编译，由于重复的解释调用，可能会导致性能损失。
+
+##### 描述
+
+任何JDK模块，类或用户代码的AOT编译都是实验性的，JDK 9中不支持。
+
+要使用AOTed的java.base模块，用户必须编译模块并将生成的AOT库复制到JDK安装目录中，或者在java命令行中指定它。使用AOT编译的代码对终端用户来说完全是透明的。
+
+AOT汇编是由一个新工具完成的，jaotc：
+
+```
+jaotc --output libHelloWorld.so HelloWorld.class
+jaotc --output libjava.base.so --module java.base
+```
+
+它使用Graal作为代码生成后端。
+
+在JVM启动期间，AOT初始化代码在众所周知的位置查找着名的共享库，或者在具有AOTLibrary标志的命令行中指定。 如果找到共享库，这些库被拾取并使用。 如果没有找到共享库，那么AOT将关闭此JVM实例。
+
+```
+java -XX:AOTLibrary=./libHelloWorld.so,./libjava.base.so HelloWorld
+```
+
+新的Java AOT标志和jaotc标志在以下子部分中列出，还有关于如何构建和安装java.base模块的AOT库的说明。
+
+用于AOT编译代码的容器格式是共享库。 JDK 9版本仅支持Linux / x64，其中共享库格式为ELF。 AOT库中的AOT编译代码被JVM视为现有CodeCache的扩展。当加载Java类时，JVM看起来如果在加载的AOT库中存在相应的AOT编译方法，并从java方法描述符添加它们的链接。 AOT编译的代码遵循与正常的JIT编译代码相同的调用/去优化/卸载规则。
+
+由于类字节码可以随着时间的推移而变化，通过对源代码的更改或通过类转换和重新定义，JVM需要检测这些更改并拒绝AOT编译的代码（如果字节码不匹配）。这是通过类指纹来实现的。在AOT编译期间，每个类的指纹都生成并存储在共享库的数据部分。后来，当加载一个类并且为该类找到AOT编译的代码时，将当前字节码的指纹与存储在共享库中的指纹进行比较。如果不匹配，则不使用该特定类的AOT代码。
+
+在AOT编译和执行过程中应该使用相同的JDK。 Java版本记录在AOT库中，并在其加载期间进行检查。 Java更新时需要重新编译AOT。
+
+##### AOT用法
+
+使用jaotc工具执行AOT编译。 该工具是java安装的一部分 - 与javac相同。
+
+```
+jaotc --output libHelloWorld.so HelloWorld.class
+```
+然后在应用程序执行期间指定生成的AOT库：
+
+```
+java -XX:AOTLibrary=./libHelloWorld.so HelloWorld
+```
+对于此版本，在AOT编译和执行期间应使用相同的java运行时配置。 例如：
+
+```
+jaotc -J-XX:+UseParallelGC -J-XX:-UseCompressedOops --output libHelloWorld.so HelloWorld.class 
+java -XX:+UseParallelGC -XX:-UseCompressedOops -XX:AOTLibrary=./libHelloWorld.so HelloWorld
+```
+
+它包括使用相同的JDK构建变体：产品或调试的要求。
+
+运行时配置记录在AOT库中，并在执行期间加载库时进行验证。如果验证失败，则不会使用AOT库，如果指定-XX：+ UseAOTStrictLoading标志，则JVM将继续运行或退出。
+
+在JVM启动过程中，AOT初始化代码在众所周知的位置或由-XX：AOTLibrary选项指定的库中寻找众所周知的共享库。如果找到共享库，这些库被拾取并使用。如果没有找到共享库，那么AOT将关闭此JVM实例运行。
+
+AOT库可以由--compile-for-tiered标志控制的两种模式进行编译：
+
+非层次的AOT编译代码与静态编译的C ++代码类似，因为没有收集分析信息，并且不会发生JIT重新编译。
+分层AOT编译代码将收集分析信息。完成的分析与通过在方法2编译的C1方法完成的简单分析相同。如果AOT方法命中AOT调用阈值，则首先通过C1重新编译这些方法，以便收集完整的分析信息。这是C2 JIT重新编译所必需的，以便产生最佳代码并达到应用程序的最高性能。
+重新编译代码在Tier 3的额外步骤是必要的，因为完整分析的开销太高，无法用于所有方法，特别是对于模块（如java.base）中的方法。对于用户应用程序，使用等效3层级的分析来允许AOT编译可能是有意义的，但JDK 9不支持这一点。
+
+java.base的逻辑编译模式是分层AOT，因为需要java.base方法的JIT重新编译才能达到峰值性能。只有在某些情况下，无级的AOT编译才有意义。这包括当占用空间比峰值性能更重要时，或者不允许动态代码生成的系统，需要可预测的行为的应用程序。在这些情况下，需要对整个应用程序进行AOT编译，因此在JDK 9中进行实验。
+
+可以为不同的执行环境生成一组AOT库。 JVM知道为特定运行时配置生成的java.base AOT库的下一个众所周知的名称。它将在$ JAVA_HOME / lib目录中查找它们，并加载与当前运行时配置相对应的配置：
+
+```
+-XX:-UseCompressedOops -XX:+UseG1GC :       libjava.base.so
+-XX:+UseCompressedOops -XX:+UseG1GC :       libjava.base-coop.so
+-XX:-UseCompressedOops -XX:+UseParallelGC : libjava.base-nong1.so
+-XX:+UseCompressedOops -XX:+UseParallelGC : libjava.base-coop-nong1.so
+```
+
+JVM还知道下一个java模块的AOT库名称，但是它们的编译，安装和使用是实验性的：
+
+```
+jdk.compiler 
+jdk.scripting.nashorn 
+jdk.vm.ci 
+jdk.vm.compiler
+```
+
+##### 为java.base模块生成和使用AOT库的步骤
+
+使用jaotc编译java.base模块。 它需要大的java堆来保存所有编译方法的数据（约50000种方法）：
+
+```
+jaotc -J-XX:+UseCompressedOops -J-XX:+UseG1GC -J-Xmx4g --compile-for-tiered --info --compile-commands java.base-list.txt --output libjava.base-coop.so --module java.base
+```
+
+java.base中的某些方法会导致编译失败，并使用--compile-commands选项排除这些方法：
+
+```
+cat java.base-list.txt
+
+# jaotc: java.lang.StackOverflowError
+exclude sun.util.resources.LocaleNames.getContents()[[Ljava/lang/Object;
+exclude sun.util.resources.TimeZoneNames.getContents()[[Ljava/lang/Object;
+exclude sun.util.resources.cldr.LocaleNames.getContents()[[Ljava/lang/Object;
+exclude sun.util.resources..*.LocaleNames_.*.getContents\(\)\[\[Ljava/lang/Object;
+exclude sun.util.resources..*.LocaleNames_.*_.*.getContents\(\)\[\[Ljava/lang/Object;
+exclude sun.util.resources..*.TimeZoneNames_.*.getContents\(\)\[\[Ljava/lang/Object;
+exclude sun.util.resources..*.TimeZoneNames_.*_.*.getContents\(\)\[\[Ljava/lang/Object;
+# java.lang.Error: Trampoline must not be defined by the bootstrap classloader
+exclude sun.reflect.misc.Trampoline.<clinit>()V
+exclude sun.reflect.misc.Trampoline.invoke(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;
+# JVM asserts
+exclude com.sun.crypto.provider.AESWrapCipher.engineUnwrap([BLjava/lang/String;I)Ljava/security/Key;
+exclude sun.security.ssl.*
+exclude sun.net.RegisteredDomain.<clinit>()V
+# Huge methods
+exclude jdk.internal.module.SystemModules.descriptors()[Ljava/lang/module/ModuleDescriptor;
+```
+
+生成AOT库后，在使用-XX：AOTLibrary选项执行应用程序时指定它（默认情况下，java在JDK 9中使用G1和压缩的oops - 您不需要指定这些标志）：
+
+```
+java -XX:AOTLibrary=./libjava.base-coop.so,./libHelloWorld.so HelloWorld
+```
+或将生成的AOT库复制到JDK安装目录（您可能需要调整目录的权限）：
+
+```
+cp libjava.base-coop.so $JAVA_HOME/lib/
+```
+在这种情况下，它将自动加载，而无需在命令行中指定：
+
+```
+java -XX:AOTLibrary=./libHelloWorld.so HelloWorld
+```
+考虑从AOT库中删除未使用的符号以减少库的大小。
+
+##### 新的运行时AOT标志
+
+```
+-XX:+/-UseAOT
+```
+使用AOT编译的文件。 默认为ON。
+
+```
+-XX:AOTLibrary=<file>
+```
+指定AOT库文件的列表。 用冒号（:)或逗号（，）分隔图书馆条目。
+
+```
+-XX:+/-PrintAOT
+```
+打印使用AOT klasses和方法。
+
+附加诊断标志可用（需要指定-XX：+ UnlockDiagnosticVMOptions标志）：
+
+```
+-XX:+/-UseAOTStrictLoading
+```
+如果任何AOT库的运行时配置与当前运行时设置不匹配，则退出JVM。
+
+JVM运行时具有与JEP 158集成的以下Unified Logging AOT标签：Unified JVM Logging。
+
+```
+aotclassfingerprint
+```
+创建日志，案例类的指纹与AOT库中记录的指纹不匹配。
+
+```
+aotclassload
+```
+在AOT库中找到相应的类数据时创建日志。
+
+```
+aotclassresolve
+```
+当AOT编译代码解析类的请求成功与否时，创建日志。
+
+##### jaotc：Java Ahead-Of-Time编译器
+
+jaotc是java静态编译器，它为编译的java方法生成本机代码。它使用Graal作为代码生成后端和libelf来生成.so AOT库。
+
+该工具是java安装的一部分，可以像javac一样使用。
+
+```
+jaotc <options> <name or list>
+```
+其中'name'是类名或jar文件。 'list'是一个分离的类名，模块，jar文件或包含类文件的目录的列表。
+
+以下jaotc选项可用：
+
+```
+--output <file>
+```
+输出文件名。默认名称为“unnamed.so”。
+
+```
+--class-name <class names>
+```
+要编译的Java类列表
+
+```
+--jar <jar files>
+```
+要编译的jar文件列表
+
+```
+--module <modules>
+```
+要编译的Java模块列表
+
+```
+--directory <dirs>
+```
+搜索要编译的文件的目录列表
+
+```
+--search-path <dirs>
+```
+用于搜索指定文件的目录列表
+
+```
+--compile-commands <file>
+```
+使用编译命令的文件名：
+
+```
+exclude sun.util.resources..*.TimeZoneNames_.*.getContents\(\)\[\[Ljava/lang/Object; 
+exclude sun.security.ssl.* 
+compileOnly java.lang.String.*
+```
+AOT目前识别两个编译命令：
+
+```
+exclude       - exclude compilation of specified methods 
+compileOnly   - compile only specified methods
+```
+正则表达式用于指定类和方法。
+
+```
+--compile-for-tiered
+```
+生成分层编译的分析代码。默认情况下，不会生成分析代码（将来可以更改）。
+
+```
+--compile-with-assertions
+```
+用java断言生成代码。默认情况下，不生成代码。
+
+```
+--compile-threads <number>
+```
+要使用的编译线程数。默认值为min（16，available_cpus）。
+
+```
+--ignore-errors
+```
+忽略在加载类时抛出的所有异常。如果类加载抛出异常，默认退出编译。
+
+```
+--exit-on-error
+```
+退出编译错误。默认情况下，跳过编译，并继续编译其他方法。
+
+```
+--info
+```
+打印有关编译阶段的信息
+
+```
+--verbose
+```
+打印有关编译阶段的更多详细信息，打开--info标志
+
+```
+--debug
+```
+打印更多的细节，打开--info和--verbose标志
+
+```
+--help
+```
+打印jaotc的使用信息和标志
+
+```
+--version
+```
+打印版本信息
+
+```
+-J<flag>
+```
+将标志直接传递到JVM运行时系统
+
+##### 当前AOT限制
+ 
+JDK 9中的AOT初始版本仅供实验使用，仅限于使用Parallel或G1 GC运行64位Java的Linux x64系统。
+系统必须安装libelf，以便生成AOT共享库（.so）作为AOT编译的结果。
+AOT编译必须在同一个系统或具有与Java应用程序将使用AOT代码的相同配置的系统上执行。
+在AOT编译和执行过程中必须使用相同的Java运行时配置。例如，如果应用程序还使用带有AOT代码的Parallel GC，那么jaotc工具应该使用Parallel GC（使用-J标志）运行。执行失败运行时配置可能导致应用程序崩溃。
+不能编译使用动态生成的类和字节码（lambda表达式，调用动态）的java代码。
+这些限制可能在将来的版本中得到解决。
+
+##### 备择方案
+
+已经讨论了配置文件或编译决策的保存，但这并没有减少编译代码的时间。有可能保存一个非常晚的低级别的IR副本可以替代，但这似乎也不复杂。
+
+##### 测试
+
+将开发新的AOT jtreg测试来测试AOT功能。
+
+所有现有测试都可以使用支持AOT的JDK运行。这已经是单独的夜间测试配置。
+
+另一个配置使用AOT编译的java.base模块在启用AOT的JDK上运行所有测试。
+
+##### 风险与假设
+
+可能的是，使用预编译代码可能导致使用的优化代码不太理想，导致性能下降。性能测试表明，一些应用程序受益于AOT编译代码，而其他应用程序则显示出回归。由于AOT功能是选择性功能，因此用户应用程序的性能回归可能是可以避免的。如果用户发现应用程序启动速度较慢或达不到预期的峰值性能或崩溃，则可以使用-XX：-UseAOT标志关闭AOT，或者删除任何AOT库。
+
+建议AOT编译将在受信任的环境中进行，其中JDK库和工具可以免受篡改。
+
+##### 依赖性
+
+该项目依赖于JEP 243：Java级JVM编译器接口，因为AOT编译器使用Graal作为代码生成后端，而后者依赖于JVMCI。
+
+该项目将将Graal核心合并到JDK中，并以Linux / x64版本提供。
+
+#### JEP 297: Unified arm32/arm64 Port
+##### 概要
+
+将由Oracle贡献的arm32和arm64的HotSpot统一端口集成到JDK中。
+
+##### 动机
+
+主要动机是在JDK中提供arm32 / aarch32支持。尽管已经有一些努力来支持arm32 / aarch32，但今天JDK中唯一维护的选项是零端口。 Oracle的贡献为ARM提供了完整的C1和C2支持，与其他体系结构相提并论。
+
+该端口还提供对arm64 / aarch64的支持，但是这不是一个动机，因为JDK已经包含一个仅限于aarch64的端口。
+
+##### 描述
+
+Oracle的贡献为arm32和arm64提供了C1和C2支持。代码已经在aarch32项目区域的单独存储库中合并到JDK 9树中。
+
+Oracle打算在ARM端口上开放源码于2016年8月23日在aarch32邮件列表中公布，并且在aarch32邮件列表中已经有了几个讨论主题。请按照以下链接查看这些讨论。
+
+开源JDK 9 ARM端口
+
+开源ARM端口状态
+
+Oracle ARM和AARCH64来源的Webrev
+
+接下来的aarch32
+
+在2016年10月21日（星期五）的公开电话会议上，我们同意我们应该将其纳入JDK。没有正式会议记录，会议记录已发布到aarch32列表。
+
+可以在http://cr.openjdk.java.net/~bobv/arm3264/webrev和http://hg.openjdk.java.net/aarch32-port/jdk9上的合并jdk9树获得Oracle贡献的webrev -arm3264。
+
+合并的树能够为arm32或arm64构建最小的，客户端或服务器VM。该树还可以构建现有的aarch64端口。
+
+还有一个额外的ARM特定选项--with-cpu-port，可用于指定新的aarch64 build --with-cpu-port = arm64或现有的aarch64 build --with-cpu-port = aarch64。如果未指定任何选项，则构建默认为现有的aarch64构建。
+
+意图是，aarch64的默认构建将保留现有的aarch64构建。
+
+##### 测试
+
+该端口已由Oracle内部测试，因为它是Oracle专有VM的一部分。因此，已经通过JPRT和其他内部测试进行了测试。
+
+aarch32项目中的JDK 9树已经使用jtreg进行了各种配置的测试，包括硬/软FP，版本/调试版本和客户端/服务器构建。找到了已解决的合并来源的几个问题。
+
+##### 风险
+
+共享代码的更改已被保持在最低限度。贡献的端口共享#ifdefs与aarch64端口。另外，用于ARM的#ifdefs已经在共享代码中。这意味着共享代码的更改仅限于在libproc.h中构建更改和单个#ifdef。
+
+由于这些源源自Oracle内部的封闭源端口，因此它们是Oracle内的一个已知数量，这显着降低了将其与JDK合并的相关风险。
+
+存在建立JDK的人员之间可能会有两个aarch64端口，现有的aarch64端口和统一的arm32 / arm64端口。
+
+#### JEP 298: Remove Demos and Samples
+##### 概要
+
+删除过时和未维护的演示和样品。
+
+##### 非目标
+
+创建新的或替代的演示和样本不是一个目标。
+
+##### 动机
+
+jdk / src / demo和jdk / src / sample中现有的大部分现有演示和示例都已过期，未被保护，因此对于在JDK本身或更广泛的Java社区工作的开发人员来说，这不再有用。它们的源代码不再代表Java编程语言和Java SE平台的最先进的使用，并且没有计划更新它们。许多其他来源可以提供更好的示例代码，例如在更广泛的社区中发布的许多文章，书籍和演示文稿。
+
+##### 描述
+
+几个演示用于测试，因此将被移动到jdk存储库的测试层次结构中的适当位置：
+
+demo/share/applets
+demo/share/java2d
+demo/share/jfc
+剩余的演示和样本将从jdk存储库中删除：
+
+demo/share/jvmti
+demo/share/management
+demo/share/nbproject
+demo/share/scripting
+demo/solaris/jni
+sample/share/annotations
+sample/share/forkjoin
+sample/share/jmx
+sample/share/lambda
+sample/share/nio
+sample/share/scripting
+sample/share/try-with-resources
+sample/share/vm
+sample/solaris/dtrace
+将进行相应的makefile更改。构建的JDK映像将不再包含演示或示例目录。
+
+##### 备择方案
+
+如果有强烈的需求，那么要删除的源可以发布在任何JDK发布项目之外的单独的存储库中，尽管在任何情况下，它始终可以在jdk存储库的Mercurial历史中使用。
+
+#### JEP 299: Reorganize Documentation
+##### 概要
+
+更新JDK中的源文件库和生成的文档中的文档的组织。
+
+##### 目标
+
+正式定义生成的“文档”图像的组织，以包括API规范，“手册页”（可以被认为是工具规范）和其他JDK规范。
+将当前由javadoc工具生成的20多套文档整合为JDK映像的API规范的单个集合。
+定义一个非API规范的组织存在于源存储库中，以便可以根据需要更新源代码，并且可以轻松地将其包含在生成的“docs”图像中。
+##### 非目标
+
+改变决定更新任何规范的任何流程或程序，这不是一个目标（这是一个反目标）。这包括JCP规范，如API规范和相关标准。
+在这项工作中纳入所有规格并不是一个目标。例如，JLS和JVMS不包括在此提案中。
+支持不是规范的文档不是目标。
+虽然定义一个可以容纳手册页的组织是一个目标，但并不是为JDK 9提供手册页的目标。
+##### 动机
+
+目前，JDK“docs”目标的标准版本运行javadoc工具超过20次（在Linux上为22，Solaris上为25），以生成相应数量的不同文档集，其组织方式并不明显。即使javadoc文档现在提供了一个“搜索”功能，拥有多组文档意味着您不能一次轻松地搜索所有提供的文档。
+
+以下是目前文献集合的列表;每个条目对应于javadoc工具的单独调用。第一个条目（api）是大多数人熟悉的条目：它是Java SE平台规范。
+
+```
+api
+jdk/api/attach/spec
+jdk/api/dynalink
+jdk/api/javac/tree
+jdk/api/javadoc/doclet
+jdk/api/javadoc/old/doclet
+jdk/api/javadoc/old/taglet
+jdk/api/jconsole/spec
+jdk/api/jlink
+jdk/api/jpda/jdi
+jdk/api/jshell
+jdk/api/nashorn
+jre/api/accessibility/jaccess/spec
+jre/api/management/extension
+jre/api/net/httpserver/spec
+jre/api/net/socketoptions/spec
+jre/api/nio/sctp/spec
+jre/api/plugin/dom
+jre/api/plugin/jsobject
+jre/api/security/jaas/spec
+jre/api/security/jgss/spec
+jre/api/security/smartcardio/spec
+```
+虽然有一个表面上的整体组织，不同的深度，api组件的不同位置，不一致的使用规范，都使得难以确定哪些文档集存在，以及相关规范之间的相对路径应该是什么。目前，这些页面中唯一的“索引”隐含在所谓的“砖墙”图片中。
+
+大大减少不同文件集的数量，并以明确的方式进行组织，这样做是合理的，因此在文件集之间建立链接是合理的。
+
+javadoc工具的这些各种运行目前由文件make / common / CORE_PKGS.gmk和make / common / NON_CORE_PKGS.gmk中的逻辑控制。更新这些文件容易出错，有时候会被忽略。例如，目前有四种支持的软件包不包括在任何公共文档中。最好从被记录的模块导出的包的列表中自动导出要记录的包的列表。这意味着任何时间将新的软件包列为从模块导出，它将自动包含在包含模块文档的任何文档中。
+
+此外，OpenJDK不提供其提供的工具的“手册页”，即使它们可以被认为是工具命令行的规范。将这些规范合并到存储库中是很好的，以便在必要时可以更新相应的工具，并在整个文档包中生成相应的页面并以明确的方式放置。对于各种其他规范也是如此，例如JNI规范或Javadoc标签规范，目前它们没有明确定义的家庭。
+
+最后，当前的文档包是有效的“全部或全部”。如果我们在存储库中组织了任何文档，使其可以与其应用的模块相关联，那么我们将能够构建包含特定图像子集的图像以及相应的文档。例如，如果我们为不同的Compact Profiles构建映像，我们可以轻松地构建和发布相应的文档。
+
+##### 描述
+
+##### 综合API文档
+
+生成的API文档的合并需要更改makefile，以便我们识别包含要记录的API的模块，并生成一个包含所有这些模块的软件包，其中应该记录所有的导出API。如果没有涵盖当前生成的所有API文档，我们应该定义附加文档集的组织。例如，定义各个集合作为单个顶级“api”目录中的兄弟节点存在。
+
+```
+docs/api/<doc-set>/
+```
+
+<doc-set> 应该是一个通用名称来描述相应的内容，如“jdk”或“java.se”。
+
+##### “菜单页”
+
+JDK存储库中的源代码通常按以下方式组织：
+
+```
+src/<module-name>/{share,<os-name>}/{classes,native,...}
+```
+建议使用一个新的变种扩展最后一个这样的组件：
+
+src/<module-name>/{share,<os-name>}/man
+man目录应包含封装模块中工具手册页的源。 这些文件应该使用Markdown语法，并为相应的工具命名。 例如，javac工具的手册页的源应该在src / jdk.compiler / share / man / javac.md中。
+
+构建系统应在生成的docs目录中的新顶级目录中生成相应的文件。 所生成的文件可以是HTML，也可以是支持这些的那些系统的“man”格式。 例如，javac工具的生成手册页可能在
+
+docs/man/javac.html
+docs/man/man1/javac.1
+
+##### 附加规格
+
+某些模块可能具有一些附加的相关规范，这些规范不包括在API规范或手册页中。例如，文档注释通常根据“Javadoc标签规范”编写，该规范应与javadoc工具的更新一起更新。 （它目前在Javac工具指南中有些不可思议的URL可用[https://docs.oracle.com/javase/8/docs/technotes/tools/unix/javadoc.html#CHDFCBAD]）
+
+以下是可能考虑纳入的其他一些规范：
+
+JavaBeans spec
+Input Methods Framework Specification
+Jar File Specification
+Java Native Interface Specification
+Java Remote Method Invocation
+这些规范应该放在另一个新的特定于模块的目录中：
+
+```
+src/<module-name>/{share,<os-name>}/specs
+```
+这样一个目录中的文件应该被复制到生成的docs目录中的specs目录中，但是Markdown（.md）文件除外，这些文件应该被翻译成HTML文件。如果规范由多个文件组成，则建议将所有文件分组到相应的子目录中。
+
+##### 指数
+
+该生成应该生成一个简单的最小顶级index.html文件，链接到整个生成的文档中的每个项目。这应该足以在基本“docs”构建中简单导航，但是当提供更丰富的文档包时可能会被覆盖。
+
+##### 格式
+
+HTML文件应采用HTML 5或HTML 4.01格式，并应通过验证器，如整理，链接检查和可访问性检查。随着时间的推移，我们应该将所有较旧的HTML文件迁移到HTML 5，因为支持辅助功能相关功能。
+
+Markdown文件应采用以下格式之一：Markdown; CommonMark;或Github Flavored Markdown，它为代码块的定义列表，表格和语法高亮提供了有用的扩展。
+
+##### 工具
+
+建议我们使用开源pandoc工具将Markdown文件转换为HTML或手册页（groff）格式。这将意味着构建的一些新的工具依赖。 pandoc支持上一节中列出的所有Markdown变体。
+
+##### 概要
+
+新源子目录：
+
+```
+src/<module-name/{share,<os-name>}/
+    man
+    specs
+```
+
+新建生成的docs目录：
+
+```
+docs/
+    api/
+        <doc-set-1>
+        <doc-set-2>
+        etc
+    man/
+        <HTML man pages>
+        man1/
+            <man pages in man format>
+    specs/
+        <HTML spec pages>
+        <directories for multi-file specifications>
+```
+
+##### 里程碑定义
+
+JDK 9的里程碑定义与JDK 8相同，并添加了以下内容：
+
+功能扩展完成 - 通过FC扩展请求过程授予扩展的JEP和小型增强功能的日期必须集成到主林中。
+
+初始发布候选人 - 第一个发行人候选人的建立和提交的测试日期。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
